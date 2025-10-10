@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "isort",
+            "type": "shell",
+            "command": "isort ."
+        },
+        {
+            "label": "black",
+            "type": "shell",
+            "command": "black --line-length 79 ."
+        },
+        {
+            "label": "flake8",
+            "type": "shell",
+            "command": "flake8 ."
+        },
+        {
+            "label": "mypy",
+            "type": "shell",
+            "command": "mypy --strict ."
+        },
+        {
+            "label": "pytest",
+            "type": "shell",
+            "command": "pytest -q"
+        }
+    ]
+}

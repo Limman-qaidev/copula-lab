@@ -1,0 +1,21 @@
+[flake8]
+max-line-length = 79
+select = E,W,F,C90
+exclude =
+    .git,
+    .hg,
+    .svn,
+    __pycache__,
+    .mypy_cache,
+    .pytest_cache,
+    .ruff_cache,
+    .ipynb_checkpoints,
+    build,
+    dist,
+    .venv,
+    venv,
+    env,
+    .tox,
+    site-packages,
+    node_modules,
+    .streamlit

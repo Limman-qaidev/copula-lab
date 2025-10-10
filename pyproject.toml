@@ -1,0 +1,22 @@
+[tool.black]
+line-length = 79
+target-version = ["py310"]
+
+[tool.flake8]
+max-line-length = 79
+extend-ignore = []
+select = ["E", "W", "F", "C90"]
+per-file-ignores = []
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_context = true
+pretty = true
+
+[tool.isort]
+profile = "black"
+line_length = 79
