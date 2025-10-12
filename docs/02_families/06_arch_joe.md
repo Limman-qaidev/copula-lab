@@ -30,8 +30,7 @@ Hence, the **Joe copula** in $d$ dimensions is
 
 $$
 C_\theta(u_1,\ldots,u_d)
- = 1 - \left[
-      \prod_{i=1}^d (1 - u_i)^{\theta}
+ = 1 - \left[\prod_{i=1}^d (1 - u_i)^{\theta}
      \right]^{1/\theta}
      \sum_{k=1}^d \text{(higher-order terms)}.
 $$
@@ -49,9 +48,7 @@ For the **bivariate case**, the closed form is compact:
 
 $$
 C_\theta(u,v)
- = 1 - \left[
-     (1 - (1 - u)^{\theta})(1 - (1 - v)^{\theta})
-   \right]^{1/\theta}.
+ = 1 - \left[(1 - (1 - u)^{\theta})(1 - (1 - v)^{\theta})\right]^{1/\theta}.
 $$
 
 The **density** (for $d=2$) is
