@@ -30,10 +30,14 @@ docs/
   02_families/
     01_elliptical_gaussian.md
     02_elliptical_student_t.md
-    10_arch_clayton.md
-    11_arch_gumbel.md
-    12_arch_frank.md
-    13_arch_joe.md
+    03_arch_clayton.md
+    04_arch_gumbel.md
+    05_arch_frank.md
+    06_arch_joe.md
+    07_arch_amh.md
+    08_advanced_bb_families.md
+    09_tawn_ev_extreme_value.md
+    10_plackett_fgm_misc.md
   03_calibration/
     01_pseudo_mle.md
     02_ifm.md
