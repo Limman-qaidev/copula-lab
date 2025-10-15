@@ -7,7 +7,7 @@ import logging
 import sys
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 
 import streamlit as st
 
@@ -22,145 +22,181 @@ from src.utils.transforms import empirical_pit  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-def _read_header(raw: bytes, encoding: str) -> List[str]:
-    """Extract the header row from a CSV byte buffer."""
-
+def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
-        text_stream = io.TextIOWrapper(
-            io.BytesIO(raw), encoding=encoding, newline=""
-        )
+        return io.TextIOWrapper(io.BytesIO(raw), encoding=encoding)
     except LookupError as exc:  # invalid encoding name
         raise ValueError(f"Codificación inválida: {encoding}") from exc
 
-    with text_stream:
-        line = text_stream.readline()
 
-    if not line:
-        raise ValueError("El archivo está vacío.")
-
-    reader = csv.reader([line])
-    try:
-        header = next(reader)
-    except StopIteration as exc:  # pragma: no cover - defensive
-        raise ValueError("El archivo está vacío.") from exc
+def _extract_header(raw: bytes, encoding: str) -> List[str]:
+    with _safe_decode(raw, encoding) as buffer:
+        reader = csv.reader(buffer)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("El archivo está vacío.") from exc
 
     if len(header) < 2:
-        raise ValueError("Se requieren al menos dos columnas.")
+        raise ValueError("Se requieren al menos dos columnas en el CSV.")
     return header
 
 
-st.title("Data workspace")
+def _display_preview(
+    raw: bytes,
+    columns: Iterable[str],
+    encoding: str,
+) -> None:
+    pandas_spec = importlib.util.find_spec("pandas")
+    if pandas_spec is None:
+        return
 
-st.markdown(
-    """
-Carga un archivo **CSV**, selecciona las columnas numéricas que quieras
-utilizar y transforma los datos en pseudo-observaciones empíricas.
-"""
-)
+    pandas_module = importlib.import_module("pandas")
+    with io.BytesIO(raw) as buffer:
+        try:
+            frame = pandas_module.read_csv(buffer, encoding=encoding)
+        except Exception:  # pragma: no cover - fallback handled elsewhere
+            return
+
+    preview_columns = list(columns)
+    preview_frame = frame[preview_columns].head(25)
+    st.dataframe(preview_frame, use_container_width=True, hide_index=True)
+
+
+st.title("Data")
+st.caption("Carga datos, selecciona columnas y genera pseudo-observaciones.")
 
 with st.container():
-    col_config, col_actions = st.columns((2, 1))
+    config_col, action_col = st.columns((2, 1))
 
-    with col_config:
+    with config_col:
         encoding = st.text_input("Codificación", value="utf-8")
         uploaded = st.file_uploader("Archivo CSV", type=["csv"])
+        drop_nan = st.checkbox(
+            "Eliminar filas con valores faltantes antes de construir U",
+            value=True,
+        )
 
     if uploaded is None:
-        st.info("Carga un archivo CSV para continuar.")
+        st.info("Carga un archivo CSV para comenzar.")
         st.stop()
 
     raw_bytes = uploaded.getvalue()
 
     try:
-        header_columns = _read_header(raw_bytes, encoding)
+        header_columns = _extract_header(raw_bytes, encoding)
     except ValueError as exc:
         st.error(str(exc))
         st.stop()
 
-    with col_actions:
-        st.caption("Selecciona al menos dos columnas numéricas")
-        default_selection = header_columns[: min(3, len(header_columns))]
-        selected_columns = st.multiselect(
-            "Columnas", options=header_columns, default=default_selection
-        )
+    default_selection = header_columns[: min(3, len(header_columns))]
 
+    with action_col:
+        selected_columns = st.multiselect(
+            "Columnas (elige al menos dos)",
+            options=header_columns,
+            default=default_selection,
+        )
         build = st.button("Construir U (PIT empírico)", type="primary")
 
     if not selected_columns:
-        st.warning("Selecciona al menos dos columnas para continuar.")
+        st.warning("Selecciona columnas para continuar.")
         st.stop()
 
     if len(selected_columns) < 2:
-        st.warning("Las copulas requieren como mínimo dos columnas.")
-
-if build:
-    if len(selected_columns) < 2:
-        st.error("Selecciona como mínimo dos columnas distintas.")
+        st.warning("Elige al menos dos columnas para construir una cópula.")
         st.stop()
 
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        tmp.write(raw_bytes)
-        tmp_path = Path(tmp.name)
+_display_preview(raw_bytes, selected_columns, encoding)
 
-    try:
-        data = read_csv_columns(
-            str(tmp_path), columns=selected_columns, encoding=encoding
-        )
-    except ValueError as exc:
-        st.error(str(exc))
-        tmp_path.unlink(missing_ok=True)
-        st.stop()
+if not build:
+    st.info("Pulsa el botón para generar pseudo-observaciones.")
+    st.stop()
 
-    logger.info(
-        "Datos cargados: archivo=%s, columnas=%s, n=%d",
-        uploaded.name,
-        ", ".join(selected_columns),
-        data.shape[0],
+with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
+    tmp_file.write(raw_bytes)
+    tmp_path = Path(tmp_file.name)
+
+try:
+    data = read_csv_columns(
+        str(tmp_path),
+        columns=selected_columns,
+        encoding=encoding,
+        drop_nan=drop_nan,
     )
-
-    try:
-        U = empirical_pit(data)
-    except ValueError as exc:
-        st.error(str(exc))
-        tmp_path.unlink(missing_ok=True)
-        st.stop()
-
-    logger.info("Pseudo-observaciones construidas para n=%d", U.shape[0])
-    session_utils.set_U(U)
-    st.session_state["U_columns"] = tuple(selected_columns)
-
-    pandas_spec = importlib.util.find_spec("pandas")
-    if pandas_spec is not None:
-        pandas_module = importlib.import_module("pandas")
-        st.session_state["data_df"] = pandas_module.DataFrame(
-            data,
-            columns=selected_columns,
-        )
-    else:
-        st.session_state["data_df"] = data
-
+except ValueError as exc:
     tmp_path.unlink(missing_ok=True)
+    st.error(str(exc))
+    st.stop()
 
-    st.success(f"Se almacenaron U en sesión (n={U.shape[0]}, d={U.shape[1]}).")
+logger.info(
+    "Datos cargados correctamente: archivo=%s columnas=%s n=%d",
+    uploaded.name,
+    ", ".join(selected_columns),
+    data.shape[0],
+)
 
-    chart_data = {f"U{i + 1}": U[:, i] for i in range(min(U.shape[1], 2))}
+try:
+    U = empirical_pit(data)
+except ValueError as exc:
+    tmp_path.unlink(missing_ok=True)
+    st.error(str(exc))
+    st.stop()
 
-    if U.shape[1] >= 2:
-        st.caption("Visualización de las dos primeras dimensiones de U.")
-        st.scatter_chart(chart_data)
-    else:  # pragma: no cover - condición defensiva
-        st.info("U es univariado; no hay gráfico de dispersión disponible.")
+tmp_path.unlink(missing_ok=True)
 
-    preview_rows = min(10, U.shape[0])
-    preview = U[:preview_rows, :]
-    column_labels = [
-        f"U{i + 1} ({selected_columns[i]})" for i in range(U.shape[1])
-    ]
-    preview_data = {
+logger.info("Pseudo-observaciones almacenadas: n=%d d=%d", *U.shape)
+
+session_utils.set_U(U)
+st.session_state["U_columns"] = tuple(selected_columns)
+
+pandas_spec = importlib.util.find_spec("pandas")
+if pandas_spec is not None:
+    pandas_module = importlib.import_module("pandas")
+    st.session_state["data_df"] = pandas_module.DataFrame(
+        data,
+        columns=list(selected_columns),
+    )
+else:
+    st.session_state["data_df"] = data
+
+st.success(
+    "Se generaron pseudo-observaciones en sesión: "
+    f"n={U.shape[0]}, d={U.shape[1]}"
+)
+
+if U.shape[1] >= 2:
+    st.caption("Visualización de las dos primeras dimensiones de U.")
+    chart_data = {f"U{i + 1}": U[:, i] for i in range(2)}
+    st.scatter_chart(chart_data)
+else:
+    st.info("U es univariado; no se muestra gráfico de dispersión.")
+
+preview_rows = min(10, U.shape[0])
+preview = U[:preview_rows, :]
+column_labels = [
+    f"U{i + 1} ({selected_columns[i]})" for i in range(U.shape[1])
+]
+
+if importlib.util.find_spec("pandas") is not None:
+    pandas_module = importlib.import_module("pandas")
+    preview_frame = pandas_module.DataFrame(preview, columns=column_labels)
+    st.dataframe(
+        preview_frame,
+        hide_index=True,
+        use_container_width=True,
+    )
+else:
+    preview_dict = {
         label: preview[:, idx] for idx, label in enumerate(column_labels)
     }
     st.dataframe(
-        preview_data,
-        use_container_width=True,
+        preview_dict,
         hide_index=True,
+        use_container_width=True,
     )
+
+st.info(
+    "Puedes continuar con la pestaña **Calibrate** para ajustar modelos con"
+    " las pseudo-observaciones almacenadas."
+)

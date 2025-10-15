@@ -46,4 +46,4 @@ def empirical_pit(x: NDArray[np.float64]) -> NDArray[np.float64]:
 
         ranks[:, col] = column_ranks
 
-    return ranks / float(n_obs + 1)
+    return np.asarray(ranks / float(n_obs + 1), dtype=np.float64)

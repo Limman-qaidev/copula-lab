@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-
 st.title("Calibrate (placeholder)")
 
 df: Optional[pd.DataFrame] = st.session_state.get("data_df")

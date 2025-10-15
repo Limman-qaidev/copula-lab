@@ -12,8 +12,27 @@ def read_csv_columns(
     path: str,
     columns: Sequence[str],
     encoding: str = "utf-8",
+    *,
+    drop_nan: bool = False,
 ) -> NDArray[np.float64]:
-    """Load numeric columns from a CSV file into a dense array."""
+    """Load numeric columns from a CSV file into a dense array.
+
+    Args:
+        path: Filesystem path to the CSV file.
+        columns: Column names to extract. Order is preserved.
+        encoding: Text encoding used to decode the CSV.
+        drop_nan: When ``True`` rows containing ``NaN`` values are removed
+            silently. Otherwise a ``ValueError`` is raised if non-finite
+            values are found. Defaults to ``False``.
+
+    Returns:
+        A ``float64`` dense matrix with shape ``(n_obs, len(columns))``.
+
+    Raises:
+        ValueError: If the file does not exist, the columns are missing,
+            non-numeric entries are found, or fewer than 20 observations are
+            available after validation.
+    """
 
     file_path = Path(path)
     if not file_path.exists():
@@ -83,7 +102,15 @@ def read_csv_columns(
             "Las columnas seleccionadas no se pudieron procesar correctamente."
         )
 
-    if not np.isfinite(dataset).all():
+    finite_mask = np.isfinite(dataset)
+    if drop_nan:
+        keep_rows = np.all(finite_mask, axis=1)
+        dataset = dataset[keep_rows, :]
+        if dataset.size == 0:
+            raise ValueError(
+                "No hay observaciones válidas tras eliminar filas con NaN."
+            )
+    elif not np.all(finite_mask):
         raise ValueError("Se encontraron valores no numéricos o NaN.")
 
     n_obs = dataset.shape[0]
@@ -91,3 +118,32 @@ def read_csv_columns(
         raise ValueError("Se requieren al menos 20 observaciones.")
 
     return np.asarray(dataset, dtype=np.float64)
+
+
+def read_csv_2cols(
+    path: str,
+    col_x: str,
+    col_y: str,
+    encoding: str = "utf-8",
+    *,
+    drop_nan: bool = False,
+) -> NDArray[np.float64]:
+    """Backward compatible helper that reads exactly two columns.
+
+    Args:
+        path: Filesystem path to the CSV file.
+        col_x: Name of the first numeric column.
+        col_y: Name of the second numeric column.
+        encoding: Text encoding used to decode the CSV.
+        drop_nan: Forwarded to :func:`read_csv_columns`.
+
+    Returns:
+        A ``(n, 2)`` array containing the requested columns as ``float64``.
+    """
+
+    return read_csv_columns(
+        path,
+        columns=(col_x, col_y),
+        encoding=encoding,
+        drop_nan=drop_nan,
+    )
