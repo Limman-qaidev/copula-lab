@@ -9,20 +9,9 @@ from typing import List
 
 import streamlit as st
 
-try:
-    from src.utils import session as session_utils
-    from src.utils.io import read_csv_2cols
-    from src.utils.transforms import empirical_pit
-except ModuleNotFoundError:  # pragma: no cover - runtime environment guard
-    import sys
-
-    ROOT_DIR = Path(__file__).resolve().parents[2]
-    if str(ROOT_DIR) not in sys.path:
-        sys.path.append(str(ROOT_DIR))
-
-    from src.utils import session as session_utils
-    from src.utils.io import read_csv_2cols
-    from src.utils.transforms import empirical_pit
+from src.utils import session as session_utils
+from src.utils.io import read_csv_2cols
+from src.utils.transforms import empirical_pit
 
 logger = logging.getLogger(__name__)
 
