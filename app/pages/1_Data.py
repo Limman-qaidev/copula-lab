@@ -1,129 +1,166 @@
 from __future__ import annotations
 
+import csv
+import importlib
 import io
 import logging
-from typing import List, BinaryIO
+import sys
+import tempfile
+from pathlib import Path
+from typing import List
 
-import pandas as pd
 import streamlit as st
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.utils import session as session_utils  # noqa: E402
+from src.utils.io import read_csv_columns  # noqa: E402
+from src.utils.transforms import empirical_pit  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-st.title("Data")
+
+def _read_header(raw: bytes, encoding: str) -> List[str]:
+    """Extract the header row from a CSV byte buffer."""
+
+    try:
+        text_stream = io.TextIOWrapper(
+            io.BytesIO(raw), encoding=encoding, newline=""
+        )
+    except LookupError as exc:  # invalid encoding name
+        raise ValueError(f"Codificación inválida: {encoding}") from exc
+
+    with text_stream:
+        line = text_stream.readline()
+
+    if not line:
+        raise ValueError("El archivo está vacío.")
+
+    reader = csv.reader([line])
+    try:
+        header = next(reader)
+    except StopIteration as exc:  # pragma: no cover - defensive
+        raise ValueError("El archivo está vacío.") from exc
+
+    if len(header) < 2:
+        raise ValueError("Se requieren al menos dos columnas.")
+    return header
+
+
+st.title("Data workspace")
 
 st.markdown(
-    "Upload a **CSV** or **Parquet** file, pick numeric columns (2+), "
-    "and store it in the session."
+    """
+Carga un archivo **CSV**, selecciona las columnas numéricas que quieras
+utilizar y transforma los datos en pseudo-observaciones empíricas.
+"""
 )
 
-uploaded = st.file_uploader(
-    "Upload CSV/Parquet",
-    type=["csv", "parquet"],
-)
+with st.container():
+    col_config, col_actions = st.columns((2, 1))
 
+    with col_config:
+        encoding = st.text_input("Codificación", value="utf-8")
+        uploaded = st.file_uploader("Archivo CSV", type=["csv"])
 
-@st.cache_data(show_spinner=False)
-def _read_file(buf: BinaryIO, name: str) -> pd.DataFrame:
-    """
-    Read a CSV or Parquet file-like object into a DataFrame.
+    if uploaded is None:
+        st.info("Carga un archivo CSV para continuar.")
+        st.stop()
 
-    Args:
-        buf (BinaryIO): Binary file-like buffer positioned at start.
-        name (str): Original filename (used to infer format).
+    raw_bytes = uploaded.getvalue()
 
-    Returns:
-        pd.DataFrame: Loaded dataframe.
+    try:
+        header_columns = _read_header(raw_bytes, encoding)
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
 
-    Raises:
-        ValueError: If extension is unsupported.
-    """
-    lower = name.lower()
-    if lower.endswith(".csv"):
-        return pd.read_csv(buf)
-    if lower.endswith(".parquet"):
-        return pd.read_parquet(buf)
-    raise ValueError(
-        "Unsupported file extension. Use .csv or .parquet."
-    )
-
-
-def _ensure_min_columns(cols: List[str], k: int = 2) -> None:
-    """
-    Validate a minimum number of selected columns.
-
-    Args:
-        cols (List[str]): Selected column names.
-        k (int): Minimum required columns (default 2).
-
-    Raises:
-        ValueError: If fewer than k columns are provided.
-    """
-    if len(cols) < k:
-        raise ValueError(
-            f"Select at least {k} numeric columns (got {len(cols)})."
+    with col_actions:
+        st.caption("Selecciona al menos dos columnas numéricas")
+        default_selection = header_columns[: min(3, len(header_columns))]
+        selected_columns = st.multiselect(
+            "Columnas", options=header_columns, default=default_selection
         )
 
+        build = st.button("Construir U (PIT empírico)", type="primary")
 
-if uploaded is not None:
-    # Convert UploadedFile to a BytesIO to satisfy strict typing.
-    data = uploaded.getvalue()
-    df = _read_file(io.BytesIO(data), uploaded.name)
+    if not selected_columns:
+        st.warning("Selecciona al menos dos columnas para continuar.")
+        st.stop()
 
-    st.write(
-        f"Loaded **{uploaded.name}**: "
-        f"{df.shape[0]} rows × {df.shape[1]} cols"
-    )
-    st.dataframe(df.head(25), use_container_width=True)
+    if len(selected_columns) < 2:
+        st.warning("Las copulas requieren como mínimo dos columnas.")
 
-    numeric_cols: List[str] = df.select_dtypes(
-        include=["number"]
-    ).columns.tolist()
+if build:
+    if len(selected_columns) < 2:
+        st.error("Selecciona como mínimo dos columnas distintas.")
+        st.stop()
 
-    st.divider()
-    st.subheader("Column selection")
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+        tmp.write(raw_bytes)
+        tmp_path = Path(tmp.name)
 
-    default_cols: List[str] = (
-        numeric_cols[:2] if len(numeric_cols) >= 2 else numeric_cols
-    )
-    picked = st.multiselect(
-        "Numeric columns (choose at least 2)",
-        options=numeric_cols,
-        default=default_cols,
+    try:
+        data = read_csv_columns(
+            str(tmp_path), columns=selected_columns, encoding=encoding
+        )
+    except ValueError as exc:
+        st.error(str(exc))
+        tmp_path.unlink(missing_ok=True)
+        st.stop()
+
+    logger.info(
+        "Datos cargados: archivo=%s, columnas=%s, n=%d",
+        uploaded.name,
+        ", ".join(selected_columns),
+        data.shape[0],
     )
 
     try:
-        _ensure_min_columns(picked, k=2)
+        U = empirical_pit(data)
     except ValueError as exc:
-        st.warning(str(exc))
+        st.error(str(exc))
+        tmp_path.unlink(missing_ok=True)
         st.stop()
 
-    na_policy = st.selectbox(
-        "Missing values policy",
-        ["drop rows with NA", "keep (as-is)"],
-    )
+    logger.info("Pseudo-observaciones construidas para n=%d", U.shape[0])
+    session_utils.set_U(U)
+    st.session_state["U_columns"] = tuple(selected_columns)
 
-    df_selected = df[picked].copy()
-    if na_policy == "drop rows with NA":
-        before = len(df_selected)
-        df_selected = df_selected.dropna()
-        after = len(df_selected)
-        if after < before:
-            logger.info(
-                "Dropped %d rows with NA (from %d to %d).",
-                before - after,
-                before,
-                after,
-            )
+    pandas_spec = importlib.util.find_spec("pandas")
+    if pandas_spec is not None:
+        pandas_module = importlib.import_module("pandas")
+        st.session_state["data_df"] = pandas_module.DataFrame(
+            data,
+            columns=selected_columns,
+        )
+    else:
+        st.session_state["data_df"] = data
 
-    st.session_state["data_df"] = df_selected
-    st.success(
-        f"Saved to session: "
-        f"{df_selected.shape[0]} rows × {df_selected.shape[1]} cols"
-    )
+    tmp_path.unlink(missing_ok=True)
 
-    st.info(
-        "Next: go to **Calibrate** to fit a copula "
-        "(placeholder in this step)."
+    st.success(f"Se almacenaron U en sesión (n={U.shape[0]}, d={U.shape[1]}).")
+
+    chart_data = {f"U{i + 1}": U[:, i] for i in range(min(U.shape[1], 2))}
+
+    if U.shape[1] >= 2:
+        st.caption("Visualización de las dos primeras dimensiones de U.")
+        st.scatter_chart(chart_data)
+    else:  # pragma: no cover - condición defensiva
+        st.info("U es univariado; no hay gráfico de dispersión disponible.")
+
+    preview_rows = min(10, U.shape[0])
+    preview = U[:preview_rows, :]
+    column_labels = [
+        f"U{i + 1} ({selected_columns[i]})" for i in range(U.shape[1])
+    ]
+    preview_data = {
+        label: preview[:, idx] for idx, label in enumerate(column_labels)
+    }
+    st.dataframe(
+        preview_data,
+        use_container_width=True,
+        hide_index=True,
     )
-else:
-    st.info("Upload a file to proceed.")
