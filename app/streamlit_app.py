@@ -15,7 +15,7 @@ Calibrate and compare **copulas** on financial data with live diagnostics.
 )
 
 # Handy links to pages
-st.page_link("pages/1_Data.py", label="→ Data", icon="📄")
+st.page_link("pages/2_Data.py", label="→ Data", icon="📄")
 st.page_link("pages/2_Calibrate.py", label="→ Calibrate", icon="⚙️")
 st.page_link("pages/3_Compare.py", label="→ Compare", icon="📊")
 st.page_link("pages/4_Study.py", label="→ Study", icon="📚")
