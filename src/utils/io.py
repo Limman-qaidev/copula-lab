@@ -2,47 +2,44 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
 
 
-def read_csv_2cols(
+def read_csv_columns(
     path: str,
-    col_x: str,
-    col_y: str,
+    columns: Sequence[str],
     encoding: str = "utf-8",
+    *,
+    drop_nan: bool = False,
 ) -> NDArray[np.float64]:
-    """Load two numeric columns from a CSV file into a ``(n, 2)`` array.
-
-    The function attempts to use :mod:`pandas` if it is available in the
-    environment. When :mod:`pandas` cannot be imported, it falls back to
-    :func:`numpy.genfromtxt`.
+    """Load numeric columns from a CSV file into a dense array.
 
     Args:
-        path:
-            Path to the CSV file on disk.
-        col_x:
-            Name of the first column.
-        col_y:
-            Name of the second column.
-        encoding:
-            Text encoding used to decode the file. Defaults to ``"utf-8"``.
+        path: Filesystem path to the CSV file.
+        columns: Column names to extract. Order is preserved.
+        encoding: Text encoding used to decode the CSV.
+        drop_nan: When ``True`` rows containing ``NaN`` values are removed
+            silently. Otherwise a ``ValueError`` is raised if non-finite
+            values are found. Defaults to ``False``.
 
     Returns:
-        ``NDArray[np.float64]`` containing the selected columns as
-        floating-point numbers.
+        A ``float64`` dense matrix with shape ``(n_obs, len(columns))``.
 
     Raises:
-        ValueError: If the CSV cannot be read, the requested columns are
-            missing, the data contain NaNs or non-finite values, or fewer
-            than twenty observations are available.
+        ValueError: If the file does not exist, the columns are missing,
+            non-numeric entries are found, or fewer than 20 observations are
+            available after validation.
     """
 
     file_path = Path(path)
     if not file_path.exists():
         raise ValueError(f"El archivo no existe: {file_path}")
+
+    if not columns:
+        raise ValueError("Debes seleccionar al menos una columna.")
 
     dataset: Optional[NDArray[np.float64]] = None
 
@@ -54,7 +51,7 @@ def read_csv_2cols(
         try:
             frame = pd.read_csv(
                 file_path,
-                usecols=[col_x, col_y],
+                usecols=list(columns),
                 encoding=encoding,
             )
         except ValueError as exc:  # missing columns or parse issue
@@ -74,8 +71,7 @@ def read_csv_2cols(
                 raise ValueError("El CSV está vacío.") from exc
 
         try:
-            idx_x = header.index(col_x)
-            idx_y = header.index(col_y)
+            indices = [header.index(col) for col in columns]
         except ValueError as exc:
             raise ValueError(
                 "Columnas solicitadas ausentes en el encabezado del CSV."
@@ -85,7 +81,7 @@ def read_csv_2cols(
             file_path,
             delimiter=",",
             skip_header=1,
-            usecols=(idx_x, idx_y),
+            usecols=tuple(indices),
             dtype=np.float64,
             encoding=encoding,
         )
@@ -95,13 +91,26 @@ def read_csv_2cols(
 
         array = np.asarray(raw, dtype=np.float64)
         if array.ndim == 1:
-            array = np.reshape(array, (1, array.size))
+            array = np.reshape(array, (array.size, 1))
         dataset = array
 
-    if dataset.ndim != 2 or dataset.shape[1] != 2:
-        raise ValueError("El CSV debe aportar exactamente dos columnas.")
+    if dataset.ndim != 2:
+        raise ValueError("El CSV debe producir una matriz bidimensional.")
 
-    if not np.isfinite(dataset).all():
+    if dataset.shape[1] != len(columns):
+        raise ValueError(
+            "Las columnas seleccionadas no se pudieron procesar correctamente."
+        )
+
+    finite_mask = np.isfinite(dataset)
+    if drop_nan:
+        keep_rows = np.all(finite_mask, axis=1)
+        dataset = dataset[keep_rows, :]
+        if dataset.size == 0:
+            raise ValueError(
+                "No hay observaciones válidas tras eliminar filas con NaN."
+            )
+    elif not np.all(finite_mask):
         raise ValueError("Se encontraron valores no numéricos o NaN.")
 
     n_obs = dataset.shape[0]
@@ -109,3 +118,32 @@ def read_csv_2cols(
         raise ValueError("Se requieren al menos 20 observaciones.")
 
     return np.asarray(dataset, dtype=np.float64)
+
+
+def read_csv_2cols(
+    path: str,
+    col_x: str,
+    col_y: str,
+    encoding: str = "utf-8",
+    *,
+    drop_nan: bool = False,
+) -> NDArray[np.float64]:
+    """Backward compatible helper that reads exactly two columns.
+
+    Args:
+        path: Filesystem path to the CSV file.
+        col_x: Name of the first numeric column.
+        col_y: Name of the second numeric column.
+        encoding: Text encoding used to decode the CSV.
+        drop_nan: Forwarded to :func:`read_csv_columns`.
+
+    Returns:
+        A ``(n, 2)`` array containing the requested columns as ``float64``.
+    """
+
+    return read_csv_columns(
+        path,
+        columns=(col_x, col_y),
+        encoding=encoding,
+        drop_nan=drop_nan,
+    )
