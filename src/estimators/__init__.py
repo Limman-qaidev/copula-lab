@@ -1,8 +1,8 @@
-"""Backward-compatible re-export of tau inversion helpers."""
+"""Estimator helper utilities."""
 
 from __future__ import annotations
 
-from src.estimators.tau_inversion import (  # noqa: F401
+from .tau_inversion import (
     choose_nu_from_tail,
     rho_from_tau_gaussian,
     rho_from_tau_student_t,
