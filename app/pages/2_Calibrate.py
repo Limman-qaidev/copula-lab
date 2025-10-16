@@ -78,6 +78,10 @@ def _run_gaussian_ifm(U: FloatArray) -> FitResult:
         bic=bic,
     )
 
+    if not session_utils.has_U():
+        st.error("Pseudo-observations are required before calibration.")
+        st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
+        st.stop()
 
 def _run_student_ifm(U: FloatArray) -> FitResult:
     rho_hat, nu_hat = student_t_ifm(U)
