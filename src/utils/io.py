@@ -45,11 +45,13 @@ def read_csv_columns(
 
     dataset: Optional[NDArray[np.float64]] = None
 
+
     pandas_spec = importlib.util.find_spec("pandas")
     if pandas_spec is not None:
         pandas_module: Any = importlib.import_module("pandas")
         try:
             frame = pandas_module.read_csv(
+
                 file_path,
                 usecols=list(columns),
                 encoding=encoding,
