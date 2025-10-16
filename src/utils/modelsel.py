@@ -3,8 +3,6 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import norm  # type: ignore[import-untyped]
 
-from src.models.copulas.student_t import StudentTCopula
-
 from .types import FloatArray
 
 __all__ = [
@@ -85,6 +83,8 @@ def student_t_pseudo_loglik(u: FloatArray, rho: float, nu: float) -> float:
         raise ValueError("nu must be finite.")
     if nu <= 2.0:
         raise ValueError("nu must be greater than 2.")
+
+    from src.models.copulas.student_t import StudentTCopula
 
     copula = StudentTCopula(rho=float(rho), nu=float(nu))
     density = copula.pdf(np.asarray(u_array, dtype=np.float64))
