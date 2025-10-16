@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -20,21 +19,10 @@ from src.estimators.tau_inversion import (  # noqa: E402
 )
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.dependence import kendall_tau, tail_dep_upper  # noqa: E402
+from src.utils.results import FitResult  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class FitResult:
-    """Minimal structure to persist calibration results."""
-
-    family: str
-    params: dict[str, float]
-    method: str
-    loglik: float | None = None
-    aic: float | None = None
-    bic: float | None = None
 
 
 def _run_tau_inversion(
@@ -135,6 +123,7 @@ if st.button("Estimate parameters", type="primary"):
             fit_result.params,
         )
         st.session_state["fit_result"] = fit_result
+        session_utils.append_fit_result(fit_result)
         summary = ", ".join(
             f"{key}={value:.4f}" for key, value in fit_result.params.items()
         )
