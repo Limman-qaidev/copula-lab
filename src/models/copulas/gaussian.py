@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import norm, multivariate_normal
+from scipy.stats import (  # type: ignore[import-untyped]
+    multivariate_normal,
+    norm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +32,11 @@ class GaussianCopula:
         if u.ndim != 2 or u.shape[1] != 2:
             raise ValueError("u must be (n,2)")
         z = norm.ppf(np.clip(u, 1e-12, 1 - 1e-12))
-        phi_r = multivariate_normal(mean=[0.0, 0.0], cov=self.corr).pdf(z)
-        phi = norm.pdf(z)
+        mvn = multivariate_normal(mean=[0.0, 0.0], cov=self.corr)
+        phi_r = np.asarray(mvn.pdf(z), dtype=np.float64)
+        phi = np.asarray(norm.pdf(z), dtype=np.float64)
         denom = phi[:, 0] * phi[:, 1]
-        return (phi_r / denom).astype(float)
+        return np.asarray(phi_r / denom, dtype=np.float64)
 
     def cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
         u = np.asarray(u, dtype=float)
@@ -40,11 +44,11 @@ class GaussianCopula:
             raise ValueError("u must be (n,2)")
         z = norm.ppf(np.clip(u, 1e-12, 1 - 1e-12))
         mvn = multivariate_normal(mean=[0.0, 0.0], cov=self.corr)
-        return mvn.cdf(z).astype(float)
+        return np.asarray(mvn.cdf(z), dtype=np.float64)
 
     def rvs(self, n: int, seed: int | None = None) -> NDArray[np.float64]:
         if n <= 0:
             raise ValueError("n must be positive")
         rng = np.random.default_rng(seed)
         z = rng.multivariate_normal(mean=[0.0, 0.0], cov=self.corr, size=n)
-        return norm.cdf(z)
+        return np.asarray(norm.cdf(z), dtype=np.float64)
