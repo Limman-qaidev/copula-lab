@@ -91,9 +91,6 @@ def _run_student_ifm(U: FloatArray) -> FitResult:
         aic=aic,
         bic=bic,
     )
-    st.page_link(
-        "pages/1_Data.py", label="Adjust selection in Data", icon="📄"
-    )
     st.stop()
 
 try:
@@ -101,6 +98,8 @@ try:
 except ValueError as exc:
     st.error(str(exc))
     st.stop()
+
+lambda_upper = tail_dep_upper(U)
 
 def _run_student_pmle(U: FloatArray) -> FitResult:
     rho_hat, nu_hat, loglik = student_t_pmle(U)

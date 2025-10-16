@@ -7,6 +7,12 @@ from src.models.copulas.student_t import StudentTCopula
 
 from .types import FloatArray
 
+__all__ = [
+    "gaussian_pseudo_loglik",
+    "student_t_pseudo_loglik",
+    "information_criteria",
+]
+
 
 def gaussian_pseudo_loglik(u: FloatArray, rho: float) -> float:
     """

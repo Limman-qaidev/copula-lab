@@ -10,12 +10,23 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+from src.models.copulas.archimedean import (  # noqa: E402
+    ClaytonCopula,
+    FrankCopula,
+    GumbelCopula,
+)
 from src.models.copulas.student_t import StudentTCopula  # noqa: E402
 from src.utils.rosenblatt import (  # noqa: E402
+    cond_cdf_clayton,
+    cond_cdf_frank,
+    cond_cdf_gumbel,
     cond_cdf_student_t,
     gof_cvm_uniform,
     gof_ks_uniform,
+    rosenblatt_clayton,
+    rosenblatt_frank,
     rosenblatt_gaussian,
+    rosenblatt_gumbel,
     rosenblatt_student_t,
 )
 
@@ -55,3 +66,47 @@ def test_gof_statistics_align_on_gaussian() -> None:
     assert 0.0 <= cvm_gauss <= 1.0
     assert gof_ks_uniform(Z_gauss) == pytest.approx(ks_gauss)
     assert gof_cvm_uniform(Z_gauss) == pytest.approx(cvm_gauss)
+
+
+def test_cond_cdf_clayton_vectorized() -> None:
+    copula = ClaytonCopula(theta=1.5, dim=3)
+    U = copula.rvs(128, seed=321)
+    result = cond_cdf_clayton(U, theta=1.5)
+    assert result.shape == U.shape
+    assert np.all((0.0 < result) & (result < 1.0))
+
+
+def test_cond_cdf_gumbel_vectorized() -> None:
+    copula = GumbelCopula(theta=1.2, dim=3)
+    U = copula.rvs(64, seed=654)
+    result = cond_cdf_gumbel(U, theta=1.2)
+    assert result.shape == U.shape
+    assert np.all((0.0 < result) & (result < 1.0))
+
+
+def test_cond_cdf_frank_vectorized() -> None:
+    copula = FrankCopula(theta=3.0, dim=3)
+    U = copula.rvs(64, seed=111)
+    result = cond_cdf_frank(U, theta=3.0)
+    assert result.shape == U.shape
+    assert np.all((0.0 < result) & (result < 1.0))
+
+
+def test_rosenblatt_archimedean_outputs_uniforms() -> None:
+    copula = ClaytonCopula(theta=2.0, dim=3)
+    U = copula.rvs(200, seed=77)
+    Z_clayton, ks_clayton, cvm_clayton = rosenblatt_clayton(U, theta=2.0)
+    assert Z_clayton.shape == U.shape
+    assert np.all((0.0 < Z_clayton) & (Z_clayton < 1.0))
+    assert 0.0 <= ks_clayton <= 1.0
+    assert 0.0 <= cvm_clayton <= 1.0
+
+    gumbel = GumbelCopula(theta=1.3, dim=3)
+    U_g = gumbel.rvs(200, seed=1234)
+    Z_gumbel, _, _ = rosenblatt_gumbel(U_g, theta=1.3)
+    assert np.all((0.0 < Z_gumbel) & (Z_gumbel < 1.0))
+
+    frank = FrankCopula(theta=4.0, dim=3)
+    U_f = frank.rvs(200, seed=987)
+    Z_frank, _, _ = rosenblatt_frank(U_f, theta=4.0)
+    assert np.all((0.0 < Z_frank) & (Z_frank < 1.0))

@@ -4,14 +4,20 @@ from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import (  # type: ignore[import-untyped]
-    cramervonmises,
-    kstest,
-    norm,
-    t as student_t,
+from scipy import stats  # type: ignore[import-untyped]
+
+from src.models.copulas.archimedean import (
+    ClaytonCopula,
+    FrankCopula,
+    GumbelCopula,
 )
 
 from .types import FloatArray
+
+cramervonmises = stats.cramervonmises
+kstest = stats.kstest
+norm = stats.norm
+student_t = stats.t
 
 _CLIP = 1e-12
 
@@ -26,6 +32,12 @@ def _validate_u(u: NDArray[np.float64]) -> FloatArray:
         raise ValueError("u must have entries strictly inside (0, 1)")
     return np.asarray(array, dtype=np.float64)
 
+    Parameters
+    ----------
+    u:
+        Array of pseudo-observations in ``(0, 1)^d`` with ``d >= 2``.
+    rho:
+        Equicorrelation parameter shared across dimensions.
 
 def cond_cdf_gaussian(u: NDArray[np.float64], rho: float) -> FloatArray:
     """Return conditional CDFs for an equicorrelated Gaussian copula.
@@ -113,6 +125,24 @@ def cond_cdf_student_t(
     return np.asarray(result, dtype=np.float64)
 
 
+def cond_cdf_clayton(u: NDArray[np.float64], theta: float) -> FloatArray:
+    data = _validate_u(u)
+    copula = ClaytonCopula(theta=float(theta), dim=data.shape[1])
+    return copula.cond_cdf(data)
+
+
+def cond_cdf_gumbel(u: NDArray[np.float64], theta: float) -> FloatArray:
+    data = _validate_u(u)
+    copula = GumbelCopula(theta=float(theta), dim=data.shape[1])
+    return copula.cond_cdf(data)
+
+
+def cond_cdf_frank(u: NDArray[np.float64], theta: float) -> FloatArray:
+    data = _validate_u(u)
+    copula = FrankCopula(theta=float(theta), dim=data.shape[1])
+    return copula.cond_cdf(data)
+
+
 def rosenblatt(
     u: NDArray[np.float64],
     cond_cdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
@@ -184,6 +214,39 @@ def rosenblatt_student_t(
     transformed = rosenblatt(
         u, lambda w: cond_cdf_student_t(w, rho=rho, nu=nu)
     )
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_clayton(
+    u: NDArray[np.float64], theta: float
+) -> tuple[FloatArray, float, float]:
+    transformed = rosenblatt(u, lambda w: cond_cdf_clayton(w, theta=theta))
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_gumbel(
+    u: NDArray[np.float64], theta: float
+) -> tuple[FloatArray, float, float]:
+    transformed = rosenblatt(u, lambda w: cond_cdf_gumbel(w, theta=theta))
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_frank(
+    u: NDArray[np.float64], theta: float
+) -> tuple[FloatArray, float, float]:
+    transformed = rosenblatt(u, lambda w: cond_cdf_frank(w, theta=theta))
     return (
         transformed,
         gof_ks_uniform(transformed),
