@@ -24,7 +24,7 @@ DATA_PAGE: StreamlitPage = st.Page(
     url_path="data",
 )
 CALIBRATE_PAGE: StreamlitPage = st.Page(
-    "pages/3_Calibrate.py",
+    "pages/2_Calibrate.py",
     title="Calibrate",
     icon="⚙️",
     url_path="calibrate",
