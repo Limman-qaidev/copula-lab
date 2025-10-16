@@ -10,10 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
 from src.estimators.student_t import student_t_pmle  # noqa: E402
 from src.estimators.tau_inversion import rho_from_tau_gaussian  # noqa: E402
 from src.utils import session as session_utils  # noqa: E402

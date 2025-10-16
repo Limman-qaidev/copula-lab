@@ -7,10 +7,6 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
 from src.estimators.ifm import gaussian_ifm  # noqa: E402
 from src.estimators.student_t import (  # noqa: E402
     student_t_ifm,

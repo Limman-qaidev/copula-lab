@@ -65,7 +65,7 @@ def gaussian_pseudo_loglik(u: FloatArray, rho: float) -> float:
 def student_t_pseudo_loglik(u: FloatArray, rho: float, nu: float) -> float:
     """Compute the Student t copula pseudo log-likelihood for
     bivariate data."""
-
+    from src.models.copulas.student_t import StudentTCopula
     u_array = np.asarray(u, dtype=np.float64)
     if u_array.ndim != 2 or u_array.shape[1] != 2:
         raise ValueError("u must be a (n, 2) array of pseudo-observations.")

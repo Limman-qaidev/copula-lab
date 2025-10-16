@@ -9,10 +9,6 @@ from typing import Any, Iterable
 import numpy as np
 import streamlit as st
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
