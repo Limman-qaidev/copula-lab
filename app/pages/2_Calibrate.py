@@ -175,6 +175,10 @@ def _fit_gaussian_tau(
         display,
     )
 
+    if not session_utils.has_U():
+        st.error("Pseudo-observations are required before calibration.")
+        st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
+        st.stop()
 
 def _fit_gaussian_ifm(
     U: FloatArray, labels: Tuple[str, ...] | None
