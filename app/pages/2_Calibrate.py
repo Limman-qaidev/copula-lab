@@ -91,7 +91,16 @@ def _run_student_ifm(U: FloatArray) -> FitResult:
         aic=aic,
         bic=bic,
     )
+    st.page_link(
+        "pages/1_Data.py", label="Adjust selection in Data", icon="📄"
+    )
+    st.stop()
 
+try:
+    sample_tau = kendall_tau(U)
+except ValueError as exc:
+    st.error(str(exc))
+    st.stop()
 
 def _run_student_pmle(U: FloatArray) -> FitResult:
     rho_hat, nu_hat, loglik = student_t_pmle(U)
