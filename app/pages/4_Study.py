@@ -15,9 +15,6 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.estimators.student_t import student_t_pmle  # noqa: E402
-from src.estimators.tau_inversion import (  # noqa: E402
-    rho_matrix_from_tau_gaussian,
-)
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.dependence import kendall_tau_matrix  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
@@ -31,6 +28,24 @@ from src.utils.rosenblatt import (  # noqa: E402
 )
 from src.utils.transforms import empirical_pit  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
+
+try:  # pragma: no cover - import path differs in some deployments
+    from src.estimators.tau_inversion import (
+        rho_matrix_from_tau_gaussian,
+    )
+except ImportError:  # pragma: no cover - fallback exercised in app runtime
+
+    def rho_matrix_from_tau_gaussian(tau_matrix: FloatArray) -> FloatArray:
+        tau_arr = np.asarray(tau_matrix, dtype=np.float64)
+        if tau_arr.ndim != 2 or tau_arr.shape[0] != tau_arr.shape[1]:
+            raise ValueError("tau_matrix must be square")
+        if tau_arr.shape[0] < 2:
+            raise ValueError("tau_matrix must describe at least two variables")
+
+        corr = np.sin(0.5 * np.pi * tau_arr)
+        np.fill_diagonal(corr, 1.0)
+        return corr
+
 
 logger = logging.getLogger(__name__)
 

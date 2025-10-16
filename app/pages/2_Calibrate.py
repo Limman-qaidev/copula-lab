@@ -12,14 +12,12 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from src.estimators.ifm import gaussian_ifm_corr  # noqa: E402
 from src.estimators.student_t import (  # noqa: E402
     student_t_ifm,
     student_t_pmle,
 )
 from src.estimators.tau_inversion import (  # noqa: E402
     choose_nu_from_tail,
-    rho_matrix_from_tau_gaussian,
     rho_matrix_from_tau_student_t,
     theta_from_tau_amh,
     theta_from_tau_clayton,
@@ -47,6 +45,69 @@ from src.utils.modelsel import (  # noqa: E402
 )
 from src.utils.results import FitResult  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
+
+GaussianMatrixFunc = Callable[[FloatArray], FloatArray]
+
+_gaussian_ifm_corr_raw: GaussianMatrixFunc | None
+try:  # pragma: no cover - import path differs in some deployments
+    from src.estimators.ifm import gaussian_ifm_corr as _gaussian_ifm_corr_raw
+except ImportError:  # pragma: no cover - fallback exercised in app runtime
+    _gaussian_ifm_corr_raw = None
+
+_rho_matrix_from_tau_gaussian_raw: GaussianMatrixFunc | None
+try:  # pragma: no cover - import path differs in some deployments
+    from src.estimators.tau_inversion import (
+        rho_matrix_from_tau_gaussian as _rho_matrix_from_tau_gaussian_raw,
+    )
+except ImportError:  # pragma: no cover - fallback exercised in app runtime
+    _rho_matrix_from_tau_gaussian_raw = None
+
+
+def gaussian_ifm_corr(U: FloatArray) -> FloatArray:
+    """Return the IFM correlation matrix with a graceful import fallback."""
+
+    if _gaussian_ifm_corr_raw is not None:
+        corr = _gaussian_ifm_corr_raw(U)
+        return np.asarray(corr, dtype=np.float64)
+
+    from scipy.stats import norm  # type: ignore[import-untyped]
+
+    u_array = np.asarray(U, dtype=np.float64)
+    if u_array.ndim != 2:
+        raise ValueError("U must be a two-dimensional array.")
+    n_obs, dim = u_array.shape
+    if n_obs < 2 or dim < 2:
+        raise ValueError(
+            "At least two observations and two dimensions are required."
+        )
+    if np.any((u_array <= 0.0) | (u_array >= 1.0)):
+        raise ValueError("U entries must lie strictly between 0 and 1.")
+
+    clipped = np.clip(u_array, 1e-12, 1.0 - 1e-12)
+    z = norm.ppf(clipped)
+    corr = np.corrcoef(z, rowvar=False)
+    corr = np.asarray(corr, dtype=np.float64)
+    np.fill_diagonal(corr, 1.0)
+    return corr
+
+
+def rho_matrix_from_tau_gaussian(tau_matrix: FloatArray) -> FloatArray:
+    """Map Kendall's tau matrix to a correlation matrix safely."""
+
+    if _rho_matrix_from_tau_gaussian_raw is not None:
+        corr = _rho_matrix_from_tau_gaussian_raw(tau_matrix)
+        return np.asarray(corr, dtype=np.float64)
+
+    tau_arr = np.asarray(tau_matrix, dtype=np.float64)
+    if tau_arr.ndim != 2 or tau_arr.shape[0] != tau_arr.shape[1]:
+        raise ValueError("tau_matrix must be square")
+    if tau_arr.shape[0] < 2:
+        raise ValueError("tau_matrix must describe at least two variables")
+
+    corr = np.sin(0.5 * np.pi * tau_arr)
+    np.fill_diagonal(corr, 1.0)
+    return corr
+
 
 logger = logging.getLogger(__name__)
 
@@ -118,19 +179,6 @@ def _fit_gaussian_tau(
         st.error("Pseudo-observations are required before calibration.")
         st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
         st.stop()
-
-def _run_student_ifm(U: FloatArray) -> FitResult:
-    rho_hat, nu_hat = student_t_ifm(U)
-    loglik = student_t_pseudo_loglik(U, rho_hat, nu_hat)
-    aic, bic = information_criteria(loglik, k_params=2, n=U.shape[0])
-    return FitResult(
-        family="Student t",
-        params={"rho": rho_hat, "nu": nu_hat},
-        method="IFM (Student t)",
-        loglik=loglik,
-        aic=aic,
-        bic=bic,
-    )
 
 def _fit_gaussian_ifm(
     U: FloatArray, labels: Tuple[str, ...] | None
