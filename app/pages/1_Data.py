@@ -29,6 +29,17 @@ def _show_altair_chart(chart: Any) -> None:
     altair_renderer = getattr(st, "altair_chart")
     altair_renderer(chart, width="stretch")
 
+def _extract_header(raw: bytes, encoding: str) -> List[str]:
+    with _safe_decode(raw, encoding) as buffer:
+        reader = csv.reader(buffer)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("The uploaded file is empty.") from exc
+
+    if len(header) < 2:
+        raise ValueError("The CSV must contain at least two columns.")
+    return header
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
