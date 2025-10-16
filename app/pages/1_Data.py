@@ -7,7 +7,7 @@ import logging
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import numpy as np
 import streamlit as st
@@ -22,6 +22,24 @@ from src.utils.transforms import empirical_pit  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+def _show_altair_chart(chart: Any) -> None:
+    """Render an Altair chart with responsive width."""
+
+    altair_renderer = getattr(st, "altair_chart")
+    altair_renderer(chart, width="stretch")
+
+def _extract_header(raw: bytes, encoding: str) -> List[str]:
+    with _safe_decode(raw, encoding) as buffer:
+        reader = csv.reader(buffer)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("The uploaded file is empty.") from exc
+
+    if len(header) < 2:
+        raise ValueError("The CSV must contain at least two columns.")
+    return header
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
@@ -97,11 +115,11 @@ def _render_preview_table(data: np.ndarray, columns: List[str]) -> None:
     if pandas_spec is not None:
         pandas_module = importlib.import_module("pandas")
         frame = pandas_module.DataFrame(subset, columns=columns)
-        st.dataframe(frame, use_container_width=True, hide_index=True)
+        st.dataframe(frame, width="stretch", hide_index=True)
     else:
         st.dataframe(
             {column: subset[:, idx] for idx, column in enumerate(columns)},
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -122,10 +140,16 @@ def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
         pandas_module = importlib.import_module("pandas")
         altair_module = importlib.import_module("altair")
         frame = pandas_module.DataFrame(subset, columns=columns)
+        clean_frame = frame.replace([np.inf, -np.inf], np.nan)
         for column in columns:
+            series = clean_frame[column].dropna()
+            if series.empty:
+                st.warning(
+                    f"Column '{column}' has no finite values in the preview."
+                )
+                continue
             chart = (
-                altair_module.Chart(frame)
-                .transform_filter(altair_module.datum[column].isValid())
+                altair_module.Chart(series.to_frame())
                 .mark_bar(color="#2563eb")
                 .encode(
                     x=altair_module.X(
@@ -136,7 +160,8 @@ def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
                 )
                 .properties(height=220)
             )
-            st.altair_chart(chart, use_container_width=True)
+            chart = chart.properties(width="container")
+            _show_altair_chart(chart)
         return
 
     try:
@@ -297,7 +322,7 @@ with summary_tab:
         st.dataframe(
             preview_frame,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
     else:
         preview_dict = {
@@ -306,7 +331,7 @@ with summary_tab:
         st.dataframe(
             preview_dict,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
 with scatter_tab:
@@ -335,7 +360,8 @@ with scatter_tab:
                 )
                 .properties(height=400)
             )
-            st.altair_chart(chart, use_container_width=True)
+            chart = chart.properties(width="container")
+            _show_altair_chart(chart)
         else:
             chart_data = {
                 f"U{i + 1}": U[:, i] for i in range(min(2, U.shape[1]))

@@ -9,6 +9,10 @@ from typing import Any, Iterable
 import numpy as np
 import streamlit as st
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
@@ -60,6 +64,13 @@ def _load_pandas() -> Any:
     import pandas as pd  # type: ignore
 
     return pd
+
+
+def _show_altair_chart(chart: Any) -> None:
+    """Render an Altair chart using the new Streamlit width API."""
+
+    altair_renderer = getattr(st, "altair_chart")
+    altair_renderer(chart, width="stretch")
 
 
 def _sort_key(criterion: str, row: dict[str, Any]) -> tuple[int, float]:
@@ -168,7 +179,7 @@ display_columns: Iterable[str] = (
 )
 if pd is not None:
     frame = pd.DataFrame(sorted_rows)
-    st.dataframe(frame.loc[:, display_columns], use_container_width=True)
+    st.dataframe(frame.loc[:, display_columns], width="stretch")
 else:
     st.table(
         [{col: row[col] for col in display_columns} for row in sorted_rows]
@@ -193,7 +204,8 @@ if pd is not None and altair_spec is not None:
             )
             .properties(height=320)
         )
-        st.altair_chart(chart, use_container_width=True)
+        chart = chart.properties(width="container")
+        _show_altair_chart(chart)
 
 options = [row["Index"] for row in sorted_rows]
 labels = [f"{row['Family']} ({row['Method']})" for row in sorted_rows]

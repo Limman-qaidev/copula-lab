@@ -7,6 +7,10 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
 from src.estimators.ifm import gaussian_ifm  # noqa: E402
 from src.estimators.student_t import (  # noqa: E402
     student_t_ifm,
@@ -73,15 +77,18 @@ def _run_gaussian_ifm(U: FloatArray) -> FitResult:
         aic=aic,
         bic=bic,
     )
-    st.stop()
 
-try:
-    sample_tau = kendall_tau(U)
-except ValueError as exc:
-    st.error(str(exc))
-    st.stop()
+    if not session_utils.has_U():
+        st.error("Pseudo-observations are required before calibration.")
+        st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
+        st.stop()
 
-lambda_upper = tail_dep_upper(U)
+    U_raw = session_utils.get_U()
+    if U_raw is None:
+        st.error(
+            "Failed to retrieve pseudo-observations from the session state."
+        )
+        st.stop()
 
 def _run_student_ifm(U: FloatArray) -> FitResult:
     rho_hat, nu_hat = student_t_ifm(U)
@@ -110,13 +117,7 @@ def _run_student_pmle(U: FloatArray) -> FitResult:
     )
 
 
-def main() -> None:
-    st.title("Calibrate")
-    st.caption(
-        "Estimate simple copula parameters from the session "
-        "pseudo-observations."
-    )
-
+def _load_session_pseudo_obs() -> FloatArray:
     if not session_utils.has_U():
         st.error("Pseudo-observations are required before calibration.")
         st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
@@ -129,10 +130,22 @@ def main() -> None:
         )
         st.stop()
 
-    U = np.asarray(U_raw, dtype=np.float64)
-    if U.ndim != 2:
+    data = np.asarray(U_raw, dtype=np.float64)
+    if data.ndim != 2:
         st.error("Pseudo-observations must be a 2D array.")
         st.stop()
+
+    return np.asarray(data, dtype=np.float64)
+
+
+def main() -> None:
+    st.title("Calibrate")
+    st.caption(
+        "Estimate simple copula parameters from the session "
+        "pseudo-observations."
+    )
+
+    U = _load_session_pseudo_obs()
 
     n_obs, dim = U.shape
     logger.info(
