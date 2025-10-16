@@ -4,7 +4,12 @@ from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import kstest, norm  # type: ignore[import-untyped]
+from scipy.stats import (  # type: ignore[import-untyped]
+    cramervonmises,
+    kstest,
+    norm,
+    t as student_t,
+)
 
 from .types import FloatArray
 
@@ -66,6 +71,48 @@ def cond_cdf_gaussian(u: NDArray[np.float64], rho: float) -> FloatArray:
     return np.asarray(result, dtype=np.float64)
 
 
+def cond_cdf_student_t(
+    u: NDArray[np.float64], rho: float, nu: float
+) -> FloatArray:
+    """Return conditional CDFs for an equicorrelated Student t copula."""
+
+    data = _validate_u(u)
+    if not (-0.999999 < rho < 0.999999):
+        raise ValueError("rho must lie inside (-1, 1)")
+    if nu <= 2.0:
+        raise ValueError("nu must be greater than 2")
+
+    _, d = data.shape
+    if d >= 2 and rho <= -1.0 / (d - 1):
+        raise ValueError("rho too negative for equicorrelation")
+
+    corr = (1.0 - rho) * np.eye(d) + rho * np.ones((d, d))
+    z = student_t.ppf(np.clip(data, _CLIP, 1.0 - _CLIP), df=nu)
+
+    result = np.empty_like(data)
+    result[:, 0] = np.clip(data[:, 0], _CLIP, 1.0 - _CLIP)
+
+    for j in range(1, d):
+        sigma11 = corr[:j, :j]
+        sigma21 = corr[j, :j]
+        sigma11_inv = np.linalg.inv(sigma11)
+        weights = sigma11_inv @ sigma21
+        base_scale = 1.0 - float(sigma21 @ weights)
+        if base_scale <= 0.0:
+            raise ValueError("conditional scale must be positive")
+
+        cond_mean = z[:, :j] @ weights
+        quad = np.einsum("ni,ij,nj->n", z[:, :j], sigma11_inv, z[:, :j])
+        cond_df = nu + float(j)
+        cond_scale = np.sqrt((nu + quad) / cond_df * base_scale)
+        standardized = student_t.cdf(
+            z[:, j], df=cond_df, loc=cond_mean, scale=cond_scale
+        )
+        result[:, j] = np.clip(standardized, _CLIP, 1.0 - _CLIP)
+
+    return np.asarray(result, dtype=np.float64)
+
+
 def rosenblatt(
     u: NDArray[np.float64],
     cond_cdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
@@ -100,10 +147,45 @@ def gof_ks_uniform(z: NDArray[np.float64]) -> float:
     return float(np.min(pvals))
 
 
+def gof_cvm_uniform(z: NDArray[np.float64]) -> float:
+    """Return the minimum Cramér–von Mises p-value across dimensions."""
+
+    data = np.asarray(z, dtype=float)
+    if data.ndim != 2:
+        raise ValueError("z must be a 2D array")
+    if data.shape[1] < 1:
+        raise ValueError("z must have at least one dimension")
+
+    pvals = [
+        cramervonmises(data[:, j], "uniform").pvalue
+        for j in range(data.shape[1])
+    ]
+    return float(np.min(pvals))
+
+
 def rosenblatt_gaussian(
     u: NDArray[np.float64], rho: float
-) -> tuple[FloatArray, float]:
-    """Compute Gaussian Rosenblatt transform and KS goodness-of-fit p-value."""
+) -> tuple[FloatArray, float, float]:
+    """Compute Gaussian Rosenblatt transform and uniformity p-values."""
 
     transformed = rosenblatt(u, lambda w: cond_cdf_gaussian(w, rho))
-    return transformed, gof_ks_uniform(transformed)
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_student_t(
+    u: NDArray[np.float64], rho: float, nu: float
+) -> tuple[FloatArray, float, float]:
+    """Compute Student t Rosenblatt transform and uniformity p-values."""
+
+    transformed = rosenblatt(
+        u, lambda w: cond_cdf_student_t(w, rho=rho, nu=nu)
+    )
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )

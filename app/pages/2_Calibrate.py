@@ -12,6 +12,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.estimators.ifm import gaussian_ifm  # noqa: E402
+from src.estimators.student_t import (  # noqa: E402
+    student_t_ifm,
+    student_t_pmle,
+)
 from src.estimators.tau_inversion import (  # noqa: E402
     choose_nu_from_tail,
     rho_from_tau_gaussian,
@@ -19,31 +23,95 @@ from src.estimators.tau_inversion import (  # noqa: E402
 )
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.dependence import kendall_tau, tail_dep_upper  # noqa: E402
+from src.utils.modelsel import (  # noqa: E402
+    gaussian_pseudo_loglik,
+    information_criteria,
+    student_t_pseudo_loglik,
+)
 from src.utils.results import FitResult  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-def _run_tau_inversion(
-    family: str, tau_value: float, lambda_upper: float
+def _run_gaussian_tau(U: FloatArray, tau_value: float) -> FitResult:
+    rho_hat = rho_from_tau_gaussian(tau_value)
+    loglik = gaussian_pseudo_loglik(U, rho_hat)
+    aic, bic = information_criteria(loglik, k_params=1, n=U.shape[0])
+    return FitResult(
+        family="Gaussian",
+        params={"rho": rho_hat},
+        method="Tau inversion",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
+
+
+def _run_student_tau(
+    U: FloatArray, tau_value: float, lambda_upper: float
 ) -> FitResult:
-    if family == "Gaussian":
-        rho_hat = rho_from_tau_gaussian(tau_value)
-        params: dict[str, float] = {"rho": rho_hat}
-    else:
-        rho_hat = rho_from_tau_student_t(tau_value)
-        nu_hat = choose_nu_from_tail(lambda_upper)
-        params = {"rho": rho_hat, "nu": nu_hat}
-    return FitResult(family=family, params=params, method="Tau inversion")
+    rho_hat = rho_from_tau_student_t(tau_value)
+    nu_hat = choose_nu_from_tail(lambda_upper)
+    loglik = student_t_pseudo_loglik(U, rho_hat, nu_hat)
+    aic, bic = information_criteria(loglik, k_params=2, n=U.shape[0])
+    return FitResult(
+        family="Student t",
+        params={"rho": rho_hat, "nu": nu_hat},
+        method="Tau inversion",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
 
 
 def _run_gaussian_ifm(U: FloatArray) -> FitResult:
     rho_hat = gaussian_ifm(U)
+    loglik = gaussian_pseudo_loglik(U, rho_hat)
+    aic, bic = information_criteria(loglik, k_params=1, n=U.shape[0])
     return FitResult(
         family="Gaussian",
         params={"rho": rho_hat},
         method="IFM (Gaussian)",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
+
+
+def _run_student_ifm(U: FloatArray) -> FitResult:
+    rho_hat, nu_hat = student_t_ifm(U)
+    loglik = student_t_pseudo_loglik(U, rho_hat, nu_hat)
+    aic, bic = information_criteria(loglik, k_params=2, n=U.shape[0])
+    return FitResult(
+        family="Student t",
+        params={"rho": rho_hat, "nu": nu_hat},
+        method="IFM (Student t)",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
+    st.page_link(
+        "pages/1_Data.py", label="Adjust selection in Data", icon="📄"
+    )
+    st.stop()
+
+try:
+    sample_tau = kendall_tau(U)
+except ValueError as exc:
+    st.error(str(exc))
+    st.stop()
+
+def _run_student_pmle(U: FloatArray) -> FitResult:
+    rho_hat, nu_hat, loglik = student_t_pmle(U)
+    aic, bic = information_criteria(loglik, k_params=2, n=U.shape[0])
+    return FitResult(
+        family="Student t",
+        params={"rho": rho_hat, "nu": nu_hat},
+        method="PMLE (Student t)",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
     )
 
 
@@ -91,28 +159,63 @@ except ValueError as exc:
 
 lambda_upper = tail_dep_upper(U)
 
-metric_cols = st.columns(2)
+metric_cols = st.columns(3)
 metric_cols[0].metric("Sample Kendall's tau", f"{sample_tau:.3f}")
-metric_cols[1].metric("Empirical upper tail dep.", f"{lambda_upper:.3f}")
+metric_cols[1].metric("Upper tail dependence", f"{lambda_upper:.3f}")
+metric_cols[2].metric("Observations", f"{n_obs}")
 
 family = st.selectbox("Copula family", ("Gaussian", "Student t"))
-method = st.selectbox("Estimation method", ("Tau inversion", "IFM (Gaussian)"))
 
-if family == "Student t":
-    st.info(
-        "Student t calibration currently relies on tau inversion with a "
-        "heuristic degrees-of-freedom mapping."
-    )
+METHOD_CHOICES: dict[str, tuple[str, ...]] = {
+    "Gaussian": ("Tau inversion", "IFM (Gaussian)"),
+    "Student t": (
+        "Tau inversion",
+        "IFM (Student t)",
+        "PMLE (Student t)",
+    ),
+}
+method = st.selectbox("Estimation method", METHOD_CHOICES[family])
 
-if method == "IFM (Gaussian)" and family != "Gaussian":
-    st.warning("IFM is currently implemented for the Gaussian copula only.")
+with st.expander("Methodology notes", expanded=False):
+    if family == "Gaussian" and method == "Tau inversion":
+        st.markdown(
+            "Kendall's tau is mapped to Pearson's correlation using the "
+            "closed-form relation."
+        )
+    elif family == "Gaussian":
+        st.markdown(
+            "IFM applies a probit transform to pseudo-observations and uses "
+            "the sample correlation of the latent Gaussian variates."
+        )
+    elif method == "Tau inversion":
+        st.markdown(
+            "Tau inversion infers the correlation from Kendall's tau and sets "
+            "the degrees of freedom from the empirical tail dependence."
+        )
+    elif method == "IFM (Student t)":
+        st.markdown(
+            "IFM leverages a Student t quantile transform with a "
+            "tail-informed degrees-of-freedom guess before computing the "
+            "latent correlation."
+        )
+    else:
+        st.markdown(
+            "PMLE maximizes the Student t copula log-likelihood using "
+            "quasi-Newton optimization."
+        )
 
 if st.button("Estimate parameters", type="primary"):
     try:
-        if method == "Tau inversion":
-            fit_result = _run_tau_inversion(family, sample_tau, lambda_upper)
-        else:
+        if family == "Gaussian" and method == "Tau inversion":
+            fit_result = _run_gaussian_tau(U, sample_tau)
+        elif family == "Gaussian":
             fit_result = _run_gaussian_ifm(U)
+        elif method == "Tau inversion":
+            fit_result = _run_student_tau(U, sample_tau, lambda_upper)
+        elif method == "IFM (Student t)":
+            fit_result = _run_student_ifm(U)
+        else:
+            fit_result = _run_student_pmle(U)
     except ValueError as exc:
         st.error(str(exc))
     else:
@@ -128,13 +231,27 @@ if st.button("Estimate parameters", type="primary"):
             f"{key}={value:.4f}" for key, value in fit_result.params.items()
         )
         st.success(f"{fit_result.family} via {fit_result.method}: {summary}")
-        st.json(
-            {
-                "family": fit_result.family,
-                "method": fit_result.method,
-                "params": fit_result.params,
-                "loglik": fit_result.loglik,
-                "aic": fit_result.aic,
-                "bic": fit_result.bic,
-            }
-        )
+
+        metrics_tab, params_tab = st.tabs(["Model metrics", "Parameter table"])
+
+        with metrics_tab:
+            metric_cols = st.columns(3)
+            metric_cols[0].metric(
+                "Log-likelihood",
+                f"{fit_result.loglik:.3f}" if fit_result.loglik else "—",
+            )
+            metric_cols[1].metric(
+                "AIC", f"{fit_result.aic:.3f}" if fit_result.aic else "—"
+            )
+            metric_cols[2].metric(
+                "BIC", f"{fit_result.bic:.3f}" if fit_result.bic else "—"
+            )
+
+        with params_tab:
+            st.json(
+                {
+                    "family": fit_result.family,
+                    "method": fit_result.method,
+                    "params": fit_result.params,
+                }
+            )

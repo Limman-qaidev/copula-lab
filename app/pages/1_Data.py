@@ -43,7 +43,7 @@ def _extract_header(raw: bytes, encoding: str) -> List[str]:
     return header
 
 
-def _display_preview(
+def _load_preview(
     raw: bytes,
     columns: Iterable[str],
     encoding: str,
@@ -59,9 +59,6 @@ def _display_preview(
         with io.BytesIO(raw) as buffer:
             frame = pandas_module.read_csv(buffer, encoding=encoding)
         preview: np.ndarray = frame[selected].to_numpy(dtype=np.float64)
-        preview_frame = frame[selected].head(200)
-        st.subheader("Preview (first 200 rows)")
-        st.dataframe(preview_frame, use_container_width=True, hide_index=True)
         return preview
 
     indices: List[int] = []
@@ -90,46 +87,75 @@ def _display_preview(
     if preview_array.ndim == 1:
         preview_array = np.reshape(preview_array, (preview_array.size, 1))
 
-    subset = preview_array[: min(200, preview_array.shape[0]), :]
-    preview_dict = {
-        column: subset[:, idx] for idx, column in enumerate(selected)
-    }
-    st.subheader("Preview (first 200 rows)")
-    st.dataframe(
-        preview_dict,
-        use_container_width=True,
-        hide_index=True,
-    )
     return preview_array
 
 
-def _display_histograms(data: np.ndarray, columns: Iterable[str]) -> None:
-    selected = list(columns)
-    if data.size == 0 or not selected:
+def _render_preview_table(data: np.ndarray, columns: List[str]) -> None:
+    rows = min(200, data.shape[0])
+    subset = data[:rows, :]
+    pandas_spec = importlib.util.find_spec("pandas")
+    if pandas_spec is not None:
+        pandas_module = importlib.import_module("pandas")
+        frame = pandas_module.DataFrame(subset, columns=columns)
+        st.dataframe(frame, use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(
+            {column: subset[:, idx] for idx, column in enumerate(columns)},
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
+    if data.size == 0 or not columns:
+        st.info("Upload data to preview histograms.")
         return
 
-    st.subheader("Column histograms (preview slice)")
-    for idx, column in enumerate(selected):
-        values = data[: min(200, data.shape[0]), idx]
-        finite = values[np.isfinite(values)]
+    rows = min(200, data.shape[0])
+    subset = data[:rows, :]
+    finite_mask = np.isfinite(subset)
+
+    pandas_spec = importlib.util.find_spec("pandas")
+    altair_spec = importlib.util.find_spec("altair")
+
+    if pandas_spec is not None and altair_spec is not None:
+        pandas_module = importlib.import_module("pandas")
+        altair_module = importlib.import_module("altair")
+        frame = pandas_module.DataFrame(subset, columns=columns)
+        for column in columns:
+            chart = (
+                altair_module.Chart(frame)
+                .transform_filter(altair_module.datum[column].isValid())
+                .mark_bar(color="#2563eb")
+                .encode(
+                    x=altair_module.X(
+                        column, bin=altair_module.Bin(maxbins=20)
+                    ),
+                    y="count()",
+                    tooltip=[column, "count()"],
+                )
+                .properties(height=220)
+            )
+            st.altair_chart(chart, use_container_width=True)
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        for idx, column in enumerate(columns):
+            finite = subset[:, idx][finite_mask[:, idx]]
+            hist, _ = np.histogram(finite, bins=20)
+            st.bar_chart(hist.astype(np.int64))
+        st.caption("Matplotlib not installed; displayed raw counts instead.")
+        return
+
+    for idx, column in enumerate(columns):
+        finite = subset[:, idx][finite_mask[:, idx]]
         if finite.size == 0:
             st.warning(f"Column '{column}' has no finite values in preview.")
             continue
-        hist, bin_edges = np.histogram(finite, bins=20)
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            st.bar_chart(hist.astype(np.int64))
-            st.caption(
-                "Matplotlib not installed; displaying counts without bin "
-                "labels."
-            )
-            continue
-
         fig, ax = plt.subplots()
-        ax.hist(
-            finite, bins=bin_edges.tolist(), color="#2563eb", edgecolor="white"
-        )
+        ax.hist(finite, bins=20, color="#2563eb", edgecolor="white")
         ax.set_title(f"Distribution of {column}")
         ax.set_xlabel(column)
         ax.set_ylabel("Frequency")
@@ -184,14 +210,20 @@ with st.container():
 preview_data: Optional[np.ndarray]
 
 try:
-    preview_data = _display_preview(
+    preview_data = _load_preview(
         raw_bytes, selected_columns, encoding, header_columns
     )
 except ValueError as exc:
     st.warning(str(exc))
     preview_data = None
 else:
-    _display_histograms(preview_data, selected_columns)
+    preview_tab, histogram_tab = st.tabs(
+        ["Preview (first 200 rows)", "Distribution snapshot"]
+    )
+    with preview_tab:
+        _render_preview_table(preview_data, list(selected_columns))
+    with histogram_tab:
+        _render_histograms(preview_data, list(selected_columns))
 
 if not build:
     st.info("Press the button to generate pseudo-observations.")
@@ -249,36 +281,69 @@ st.success(
     f"n={U.shape[0]}, d={U.shape[1]}"
 )
 
-if U.shape[1] >= 2:
-    st.caption("Scatter of the first two dimensions of U.")
-    chart_data = {f"U{i + 1}": U[:, i] for i in range(2)}
-    st.scatter_chart(chart_data)
-else:
-    st.info("U is univariate; the scatter plot is skipped.")
+summary_tab, scatter_tab, u_hist_tab = st.tabs(
+    ["Summary", "Scatter (first two dims)", "U histograms"]
+)
 
-preview_rows = min(10, U.shape[0])
-preview = U[:preview_rows, :]
-column_labels = [
-    f"U{i + 1} ({selected_columns[i]})" for i in range(U.shape[1])
-]
+with summary_tab:
+    preview_rows = min(10, U.shape[0])
+    preview = U[:preview_rows, :]
+    column_labels = [
+        f"U{i + 1} ({selected_columns[i]})" for i in range(U.shape[1])
+    ]
+    if importlib.util.find_spec("pandas") is not None:
+        pandas_module = importlib.import_module("pandas")
+        preview_frame = pandas_module.DataFrame(preview, columns=column_labels)
+        st.dataframe(
+            preview_frame,
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        preview_dict = {
+            label: preview[:, idx] for idx, label in enumerate(column_labels)
+        }
+        st.dataframe(
+            preview_dict,
+            hide_index=True,
+            use_container_width=True,
+        )
 
-if importlib.util.find_spec("pandas") is not None:
-    pandas_module = importlib.import_module("pandas")
-    preview_frame = pandas_module.DataFrame(preview, columns=column_labels)
-    st.dataframe(
-        preview_frame,
-        hide_index=True,
-        use_container_width=True,
-    )
-else:
-    preview_dict = {
-        label: preview[:, idx] for idx, label in enumerate(column_labels)
-    }
-    st.dataframe(
-        preview_dict,
-        hide_index=True,
-        use_container_width=True,
-    )
+with scatter_tab:
+    if U.shape[1] < 2:
+        st.info("U is univariate; the scatter plot is skipped.")
+    else:
+        pandas_spec = importlib.util.find_spec("pandas")
+        altair_spec = importlib.util.find_spec("altair")
+        if pandas_spec is not None and altair_spec is not None:
+            pandas_module = importlib.import_module("pandas")
+            altair_module = importlib.import_module("altair")
+            scatter_frame = pandas_module.DataFrame(
+                {
+                    "U1": U[:, 0],
+                    "U2": U[:, 1],
+                    "index": np.arange(U.shape[0]),
+                }
+            )
+            chart = (
+                altair_module.Chart(scatter_frame)
+                .mark_circle(opacity=0.7, size=60, color="#2563eb")
+                .encode(
+                    x="U1",
+                    y="U2",
+                    tooltip=["index", "U1", "U2"],
+                )
+                .properties(height=400)
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            chart_data = {
+                f"U{i + 1}": U[:, i] for i in range(min(2, U.shape[1]))
+            }
+            st.scatter_chart(chart_data)
+
+with u_hist_tab:
+    _render_histograms(U, [f"U{i + 1}" for i in range(U.shape[1])])
 
 st.info(
     "Continue with the **Calibrate** tab to fit models using "

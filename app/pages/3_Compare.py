@@ -17,6 +17,7 @@ from src.utils import session as session_utils  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
     information_criteria,
+    student_t_pseudo_loglik,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,28 @@ for idx, result in enumerate(fit_results):
                 updated = result.with_metrics(loglik=loglik, aic=aic, bic=bic)
                 session_utils.update_fit_result(idx, updated)
                 fit_results[idx] = updated
+    elif result.family == "Student t":
+        rho = result.params.get("rho")
+        nu = result.params.get("nu")
+        if not (isinstance(rho, float) and isinstance(nu, float)):
+            st.warning(
+                "Student t model requires numeric rho and nu to compute "
+                "metrics."
+            )
+        elif dim != 2:
+            st.warning(
+                "Student t comparison is currently limited to bivariate data."
+            )
+        else:
+            try:
+                loglik = student_t_pseudo_loglik(U, rho, nu)
+                aic, bic = information_criteria(loglik, k_params=2, n=n_obs)
+            except ValueError as exc:
+                st.warning(f"Failed to evaluate Student t metrics: {exc}")
+            else:
+                updated = result.with_metrics(loglik=loglik, aic=aic, bic=bic)
+                session_utils.update_fit_result(idx, updated)
+                fit_results[idx] = updated
     rows.append(
         {
             "Index": idx,
@@ -130,6 +153,7 @@ criterion_label = st.selectbox(
 )
 
 sorted_rows = sorted(rows, key=lambda row: _sort_key(criterion_label, row))
+chart_rows = [dict(row) for row in sorted_rows]
 for rank, row in enumerate(sorted_rows, start=1):
     row["Rank"] = rank
     row["LogLik"] = _format_metrics(row["LogLik"])
@@ -153,6 +177,27 @@ else:
     st.table(
         [{col: row[col] for col in display_columns} for row in sorted_rows]
     )
+
+altair_spec = importlib.util.find_spec("altair")
+if pd is not None and altair_spec is not None:
+    altair_module = importlib.import_module("altair")
+    chart_source = pd.DataFrame(chart_rows).dropna(subset=[criterion_label])
+    if not chart_source.empty:
+        chart = (
+            altair_module.Chart(chart_source)
+            .mark_bar(color="#2563eb")
+            .encode(
+                x=altair_module.X(
+                    "Params",
+                    sort=list(chart_source["Params"]),
+                    title="Model parameters",
+                ),
+                y=altair_module.Y(criterion_label, title=criterion_label),
+                tooltip=["Family", "Method", criterion_label],
+            )
+            .properties(height=320)
+        )
+        st.altair_chart(chart, use_container_width=True)
 
 options = [row["Index"] for row in sorted_rows]
 labels = [f"{row['Family']} ({row['Method']})" for row in sorted_rows]

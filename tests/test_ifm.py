@@ -12,6 +12,15 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.estimators.ifm import gaussian_ifm  # noqa: E402
+from src.estimators.student_t import (  # noqa: E402
+    student_t_ifm,
+    student_t_pmle,
+)
+from src.estimators.tau_inversion import choose_nu_from_tail  # noqa: E402
+from src.estimators.tau_inversion import rho_from_tau_student_t  # noqa: E402
+from src.models.copulas.student_t import StudentTCopula  # noqa: E402
+from src.utils.dependence import kendall_tau, tail_dep_upper  # noqa: E402
+from src.utils.modelsel import student_t_pseudo_loglik  # noqa: E402
 
 
 def test_gaussian_ifm_matches_sample_correlation() -> None:
@@ -36,3 +45,30 @@ def test_gaussian_ifm_rejects_invalid_values() -> None:
     bad = np.array([[0.5, 1.0]], dtype=np.float64)
     with pytest.raises(ValueError):
         gaussian_ifm(bad)
+
+
+def test_student_t_ifm_estimates_parameters() -> None:
+    copula = StudentTCopula(rho=0.5, nu=6.0)
+    U = copula.rvs(5000, seed=321)
+
+    rho_hat, nu_hat = student_t_ifm(U)
+
+    assert rho_hat == pytest.approx(0.5, abs=0.05)
+    assert nu_hat == pytest.approx(6.0, abs=3.0)
+    assert nu_hat > 2.0
+
+
+def test_student_t_pmle_matches_true_parameters() -> None:
+    copula = StudentTCopula(rho=0.35, nu=8.0)
+    U = copula.rvs(1500, seed=111)
+
+    rho_hat, nu_hat, loglik = student_t_pmle(U)
+
+    assert rho_hat == pytest.approx(0.35, abs=0.05)
+    assert nu_hat == pytest.approx(8.0, abs=3.0)
+    assert np.isfinite(loglik)
+
+    baseline_rho = rho_from_tau_student_t(kendall_tau(U))
+    baseline_nu = choose_nu_from_tail(tail_dep_upper(U))
+    baseline_loglik = student_t_pseudo_loglik(U, baseline_rho, baseline_nu)
+    assert loglik >= baseline_loglik

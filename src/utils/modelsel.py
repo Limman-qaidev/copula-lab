@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import norm  # type: ignore[import-untyped]
 
+from src.models.copulas.student_t import StudentTCopula
+
 from .types import FloatArray
 
 
@@ -54,6 +56,35 @@ def gaussian_pseudo_loglik(u: FloatArray, rho: float) -> float:
 
     log_density = log_det - 0.5 * quad_form + marginal_term
     return float(np.sum(log_density))
+
+
+def student_t_pseudo_loglik(u: FloatArray, rho: float, nu: float) -> float:
+    """Compute the Student t copula pseudo log-likelihood for
+    bivariate data."""
+
+    u_array = np.asarray(u, dtype=np.float64)
+    if u_array.ndim != 2 or u_array.shape[1] != 2:
+        raise ValueError("u must be a (n, 2) array of pseudo-observations.")
+    if u_array.shape[0] == 0:
+        raise ValueError("u must contain at least one observation.")
+    if np.isnan(u_array).any():
+        raise ValueError("u must not contain NaNs.")
+    if np.any((u_array <= 0.0) | (u_array >= 1.0)):
+        raise ValueError("u must take values strictly inside (0, 1).")
+    if not np.isfinite(rho):
+        raise ValueError("rho must be finite.")
+    if not (-0.999999 < rho < 0.999999):
+        raise ValueError("rho must belong to (-1, 1) to form a correlation.")
+    if not np.isfinite(nu):
+        raise ValueError("nu must be finite.")
+    if nu <= 2.0:
+        raise ValueError("nu must be greater than 2.")
+
+    copula = StudentTCopula(rho=float(rho), nu=float(nu))
+    density = copula.pdf(np.asarray(u_array, dtype=np.float64))
+    if np.any(density <= 0.0):
+        raise ValueError("Copula density returned non-positive values.")
+    return float(np.sum(np.log(density)))
 
 
 def information_criteria(
