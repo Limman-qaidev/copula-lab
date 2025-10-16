@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Union, cast
 
 import numpy as np
-import pandas as pd
 import streamlit as st
 
+if TYPE_CHECKING:
+    import pandas as pd  # type: ignore[import-untyped]
+
+DataFrameLike = Union[np.ndarray, "pd.DataFrame"]
 
 st.title("Calibrate (placeholder)")
 
-df: Optional[pd.DataFrame] = st.session_state.get("data_df")
-if df is None:
+raw_data = st.session_state.get("data_df")
+if raw_data is None:
     st.info("Go to **Data** to upload and select columns first.")
     st.stop()
 
-st.write(f"Dataset in memory: {df.shape[0]} rows × {df.shape[1]} cols")
+data = cast(DataFrameLike, raw_data)
+rows, cols = data.shape
+st.write(f"Dataset in memory: {rows} rows × {cols} cols")
 
 family = st.selectbox(
     "Copula family",
