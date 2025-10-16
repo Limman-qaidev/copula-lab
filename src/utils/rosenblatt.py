@@ -32,6 +32,12 @@ def _validate_u(u: NDArray[np.float64]) -> FloatArray:
         raise ValueError("u must have entries strictly inside (0, 1)")
     return np.asarray(array, dtype=np.float64)
 
+    Parameters
+    ----------
+    u:
+        Array of pseudo-observations in ``(0, 1)^d`` with ``d >= 2``.
+    rho:
+        Equicorrelation parameter shared across dimensions.
 
 def cond_cdf_gaussian(u: NDArray[np.float64], rho: float) -> FloatArray:
     """Return conditional CDFs for an equicorrelated Gaussian copula.
