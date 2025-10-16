@@ -12,8 +12,9 @@ def kendall_tau(u: NDArray[np.float64]) -> float:
     n = x.shape[0]
     s = 0
     for i in range(n - 1):
-        dx = x[i + 1 :] - x[i]
-        dy = y[i + 1 :] - y[i]
+        future = slice(i + 1, None)
+        dx = x[future] - x[i]
+        dy = y[future] - y[i]
         s += int(np.sum(np.sign(dx * dy)))
     denom = n * (n - 1) / 2.0
     return float(s / denom) if denom > 0 else 0.0
