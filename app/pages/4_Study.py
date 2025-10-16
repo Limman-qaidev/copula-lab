@@ -15,9 +15,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.estimators.student_t import student_t_pmle  # noqa: E402
-from src.estimators.tau_inversion import rho_from_tau_gaussian  # noqa: E402
+from src.estimators.tau_inversion import (  # noqa: E402
+    rho_matrix_from_tau_gaussian,
+)
 from src.utils import session as session_utils  # noqa: E402
-from src.utils.dependence import kendall_tau  # noqa: E402
+from src.utils.dependence import kendall_tau_matrix  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
     information_criteria,
@@ -171,21 +173,29 @@ def _run_pipeline() -> StudyArtifacts:
         "Constructed pseudo-observations for study pipeline: shape=%s", U.shape
     )
 
-    tau = kendall_tau(U)
-    rho_gauss = rho_from_tau_gaussian(tau)
-    loglik_gauss = gaussian_pseudo_loglik(U, rho_gauss)
+    tau_matrix = kendall_tau_matrix(U)
+    corr_gauss = rho_matrix_from_tau_gaussian(tau_matrix)
+    loglik_gauss = gaussian_pseudo_loglik(U, corr_gauss)
+    k_gauss = U.shape[1] * (U.shape[1] - 1) // 2
     aic_gauss, bic_gauss = information_criteria(
-        loglik_gauss, k_params=1, n=U.shape[0]
+        loglik_gauss, k_params=k_gauss, n=U.shape[0]
     )
+    params_gauss = {
+        f"rho_{i + 1}_{j + 1}": float(corr_gauss[i, j])
+        for i in range(U.shape[1])
+        for j in range(i + 1, U.shape[1])
+    }
     gaussian_fit = FitResult(
         family="Gaussian",
-        params={"rho": rho_gauss},
+        params=params_gauss,
         method="Tau inversion",
         loglik=loglik_gauss,
         aic=aic_gauss,
         bic=bic_gauss,
     )
-    Z_gauss, ks_gauss, cvm_gauss = rosenblatt_gaussian(U, rho_gauss)
+    Z_gauss, ks_gauss, cvm_gauss = rosenblatt_gaussian(
+        U, float(corr_gauss[0, 1])
+    )
     gaussian_diag = FitDiagnostics(
         fit=gaussian_fit,
         rosenblatt=Z_gauss,
@@ -193,17 +203,24 @@ def _run_pipeline() -> StudyArtifacts:
         cvm_pvalue=cvm_gauss,
     )
 
-    rho_t, nu_t, loglik_t = student_t_pmle(U)
-    aic_t, bic_t = information_criteria(loglik_t, k_params=2, n=U.shape[0])
+    corr_t, nu_t, loglik_t = student_t_pmle(U)
+    k_t = U.shape[1] * (U.shape[1] - 1) // 2 + 1
+    aic_t, bic_t = information_criteria(loglik_t, k_params=k_t, n=U.shape[0])
+    params_t = {
+        f"rho_{i + 1}_{j + 1}": float(corr_t[i, j])
+        for i in range(U.shape[1])
+        for j in range(i + 1, U.shape[1])
+    }
+    params_t["nu"] = float(nu_t)
     student_fit = FitResult(
         family="Student t",
-        params={"rho": rho_t, "nu": nu_t},
+        params=params_t,
         method="PMLE (Student t)",
         loglik=loglik_t,
         aic=aic_t,
         bic=bic_t,
     )
-    Z_t, ks_t, cvm_t = rosenblatt_student_t(U, rho_t, nu_t)
+    Z_t, ks_t, cvm_t = rosenblatt_student_t(U, float(corr_t[0, 1]), nu_t)
     student_diag = FitDiagnostics(
         fit=student_fit,
         rosenblatt=Z_t,

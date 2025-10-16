@@ -1,28 +1,28 @@
-"""Student t copula estimation helpers."""
+"""Student t copula estimation helpers for arbitrary dimensions."""
 
 from __future__ import annotations
 
 from typing import List, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.optimize import minimize  # type: ignore[import-untyped]
 from scipy.stats import t as student_t  # type: ignore[import-untyped]
 
-from src.estimators.tau_inversion import (
-    choose_nu_from_tail,
-    rho_from_tau_student_t,
-)
-from src.utils.dependence import kendall_tau, tail_dep_upper
+from src.estimators.tau_inversion import choose_nu_from_tail
+from src.utils.dependence import average_tail_dep_upper, kendall_tau_matrix
 from src.utils.modelsel import student_t_pseudo_loglik
 from src.utils.types import FloatArray
 
 _CLIP = 1e-12
 
 
-def _validate_u(u: FloatArray) -> np.ndarray:
+def _validate_u(u: FloatArray) -> NDArray[np.float64]:
     array = np.asarray(u, dtype=np.float64)
-    if array.ndim != 2 or array.shape[1] != 2:
-        raise ValueError("U must be a (n, 2) array of pseudo-observations.")
+    if array.ndim != 2:
+        raise ValueError("U must be a two-dimensional array.")
+    if array.shape[1] < 2:
+        raise ValueError("U must contain at least two dimensions.")
     if array.shape[0] < 2:
         raise ValueError("At least two observations are required.")
     if not np.isfinite(array).all():
@@ -32,76 +32,127 @@ def _validate_u(u: FloatArray) -> np.ndarray:
     return array
 
 
-def student_t_ifm(u: FloatArray) -> Tuple[float, float]:
-    """Return IFM estimates ``(rho_hat, nu_hat)`` for a Student t copula."""
+def _project_to_correlation(
+    matrix: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    sym = 0.5 * (matrix + matrix.T)
+    eigvals, eigvecs = np.linalg.eigh(sym)
+    eigvals = np.clip(eigvals, 1e-8, None)
+    adjusted = (eigvecs * eigvals) @ eigvecs.T
+    diag = np.sqrt(np.clip(np.diag(adjusted), 1e-12, None))
+    corr = adjusted / np.outer(diag, diag)
+    np.fill_diagonal(corr, 1.0)
+    return np.asarray(corr, dtype=np.float64)
+
+
+def _corr_from_params(
+    params: NDArray[np.float64], dim: int
+) -> NDArray[np.float64]:
+    diag_params = params[:dim]
+    off_params = params[dim:-1]
+    chol = np.zeros((dim, dim), dtype=np.float64)
+    chol[np.diag_indices(dim)] = np.exp(diag_params)
+    idx = 0
+    for i in range(1, dim):
+        for j in range(i):
+            chol[i, j] = off_params[idx]
+            idx += 1
+    cov = chol @ chol.T
+    diag = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+    corr = cov / np.outer(diag, diag)
+    np.fill_diagonal(corr, 1.0)
+    return np.asarray(corr, dtype=np.float64)
+
+
+def _nu_from_param(param: float) -> float:
+    return float(2.0 + np.exp(param))
+
+
+def _pack_initial(corr: NDArray[np.float64], nu: float) -> NDArray[np.float64]:
+    chol = np.linalg.cholesky(corr)
+    diag_params = np.log(np.diag(chol))
+    off_params = chol[np.tril_indices(corr.shape[0], k=-1)]
+    nu_param = np.log(max(nu - 2.0, 1e-6))
+    return np.concatenate([diag_params, off_params, np.array([nu_param])])
+
+
+def student_t_ifm(u: FloatArray) -> Tuple[NDArray[np.float64], float]:
+    """Return IFM estimates (correlation matrix, nu) for a Student t copula."""
 
     data = _validate_u(u)
-    lambda_upper = tail_dep_upper(data)
+    lambda_upper = average_tail_dep_upper(data)
     nu_hat = float(max(2.1, choose_nu_from_tail(lambda_upper)))
     clipped = np.clip(data, _CLIP, 1.0 - _CLIP)
     quantiles = student_t.ppf(clipped, df=nu_hat)
-    corr = np.corrcoef(quantiles.T)
-    rho_hat = float(np.clip(corr[0, 1], -0.999, 0.999))
-    return rho_hat, nu_hat
+    corr = np.corrcoef(quantiles, rowvar=False)
+    corr = _project_to_correlation(np.asarray(corr, dtype=np.float64))
+    return corr, nu_hat
 
 
-def _initial_guesses(data: np.ndarray) -> List[Tuple[float, float]]:
-    tau = kendall_tau(data)
-    rho_tau = rho_from_tau_student_t(tau)
-    nu_tail = float(max(2.1, choose_nu_from_tail(tail_dep_upper(data))))
-    rho_ifm, nu_ifm = student_t_ifm(data)
-
-    guesses = {
-        (rho_tau, nu_tail),
-        (rho_ifm, nu_ifm),
-        (rho_tau, max(2.1, nu_tail - 2.0)),
-        (rho_tau, max(2.1, nu_tail + 2.0)),
-    }
-    clipped = [
-        (float(np.clip(rho, -0.95, 0.95)), float(max(2.1, nu)))
-        for rho, nu in guesses
+def _initial_guesses(
+    data: NDArray[np.float64],
+) -> List[Tuple[NDArray[np.float64], float]]:
+    tau_matrix = kendall_tau_matrix(data)
+    rho_guess = np.sin(0.5 * np.pi * tau_matrix)
+    np.fill_diagonal(rho_guess, 1.0)
+    rho_guess = _project_to_correlation(rho_guess)
+    corr_ifm, nu_ifm = student_t_ifm(data)
+    lambda_upper = average_tail_dep_upper(data)
+    nu_tail = float(max(2.1, choose_nu_from_tail(lambda_upper)))
+    return [
+        (corr_ifm, nu_ifm),
+        (rho_guess, nu_tail),
+        (corr_ifm, max(2.1, nu_ifm - 2.0)),
+        (corr_ifm, min(60.0, nu_ifm + 2.0)),
     ]
-    return clipped
 
 
-def _objective(params: np.ndarray, data: np.ndarray) -> float:
-    rho, nu = float(params[0]), float(params[1])
-    if not (-0.999 < rho < 0.999) or nu <= 2.0:
-        return np.inf
-    try:
-        loglik = student_t_pseudo_loglik(data, rho, nu)
-    except ValueError:
-        return np.inf
-    return -loglik
-
-
-def student_t_pmle(u: FloatArray) -> Tuple[float, float, float]:
-    """Return PMLE estimates ``(rho_hat, nu_hat, loglik)`` for Student t."""
+def student_t_pmle(u: FloatArray) -> Tuple[NDArray[np.float64], float, float]:
+    """Return PMLE estimates (correlation, nu, loglik) for Student t copula."""
 
     data = _validate_u(u)
-    best_loglik = -np.inf
-    best_params: Tuple[float, float] | None = None
+    dim = data.shape[1]
 
-    for rho0, nu0 in _initial_guesses(data):
+    best_loglik = -np.inf
+    best_corr: NDArray[np.float64] | None = None
+    best_nu: float | None = None
+
+    for corr0, nu0 in _initial_guesses(data):
+        x0 = _pack_initial(corr0, nu0)
+
+        def objective(theta: NDArray[np.float64]) -> float:
+            corr = _corr_from_params(theta, dim)
+            nu_param = _nu_from_param(float(theta[-1]))
+            try:
+                loglik = student_t_pseudo_loglik(data, corr, nu_param)
+            except ValueError:
+                return np.inf
+            return -loglik
+
         result = minimize(
-            _objective,
-            x0=np.array([rho0, nu0], dtype=np.float64),
-            args=(data,),
+            objective,
+            x0=x0,
             method="L-BFGS-B",
-            bounds=((-0.995, 0.995), (2.05, 60.0)),
-            options={"maxiter": 500},
+            options={"maxiter": 300},
         )
+
         if not result.success:
             continue
+
+        corr_hat = _corr_from_params(result.x, dim)
+        nu_hat = _nu_from_param(float(result.x[-1]))
         loglik = -float(result.fun)
         if loglik > best_loglik:
             best_loglik = loglik
-            best_params = (float(result.x[0]), float(result.x[1]))
+            best_corr = corr_hat
+            best_nu = nu_hat
 
-    if best_params is None:
+    if best_corr is None or best_nu is None:
         raise ValueError(
             "Student t PMLE failed to converge from initial guesses."
         )
 
-    rho_hat, nu_hat = best_params
-    return rho_hat, nu_hat, best_loglik
+    return best_corr, best_nu, best_loglik
+
+
+__all__ = ["student_t_ifm", "student_t_pmle"]

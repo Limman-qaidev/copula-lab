@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import norm  # type: ignore[import-untyped]
+from numpy.typing import NDArray
+from scipy.stats import multivariate_t, norm  # type: ignore[import-untyped]
+from scipy.stats import t as student_t
 
 from .types import FloatArray
 
@@ -12,85 +14,86 @@ __all__ = [
 ]
 
 
-def gaussian_pseudo_loglik(u: FloatArray, rho: float) -> float:
-    """
-    Compute the Gaussian copula pseudo log-likelihood for bivariate data.
+def _validate_corr(matrix: FloatArray) -> NDArray[np.float64]:
+    array = np.asarray(matrix, dtype=np.float64)
+    if array.ndim != 2 or array.shape[0] != array.shape[1]:
+        raise ValueError("Correlation matrix must be square.")
+    if array.shape[0] < 2:
+        raise ValueError("Correlation matrix must be at least 2x2.")
+    if not np.allclose(array, array.T, atol=1e-9):
+        raise ValueError("Correlation matrix must be symmetric.")
+    if not np.allclose(np.diag(array), 1.0, atol=1e-9):
+        raise ValueError("Correlation matrix must have unit diagonal.")
+    try:
+        np.linalg.cholesky(array)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(
+            "Correlation matrix must be positive definite."
+        ) from exc
+    return array
 
-    Parameters
-    ----------
-    u:
-        Pseudo-observations shaped ``(n, 2)`` with values strictly inside
-        ``(0, 1)``.
-    rho:
-        Correlation parameter of the Gaussian copula. Must lie in ``(-1, 1)``.
-    """
 
-    u_array = np.asarray(u, dtype=np.float64)
-    if u_array.ndim != 2 or u_array.shape[1] != 2:
-        raise ValueError("u must be a (n, 2) array of pseudo-observations.")
+def _validate_u(u: FloatArray) -> NDArray[np.float64]:
+    array = np.asarray(u, dtype=np.float64)
+    if array.ndim != 2:
+        raise ValueError("u must be a two-dimensional array")
+    if array.shape[0] == 0:
+        raise ValueError("u must contain at least one observation")
+    if np.isnan(array).any():
+        raise ValueError("u must not contain NaNs")
+    if np.any((array <= 0.0) | (array >= 1.0)):
+        raise ValueError("u must take values strictly inside (0, 1)")
+    return array
 
-    n_obs = u_array.shape[0]
-    if n_obs == 0:
-        raise ValueError("u must contain at least one observation.")
 
-    if not np.isfinite(rho):
-        raise ValueError("rho must be finite.")
-    if not (-0.999999 < rho < 0.999999):
-        raise ValueError("rho must belong to (-1, 1) to form a correlation.")
+def gaussian_pseudo_loglik(u: FloatArray, corr: FloatArray) -> float:
+    """Compute the Gaussian copula pseudo log-likelihood in any dimension."""
 
-    if np.isnan(u_array).any():
-        raise ValueError("u must not contain NaNs.")
-    if np.any((u_array <= 0.0) | (u_array >= 1.0)):
-        raise ValueError("u must take values strictly inside (0, 1).")
+    data = _validate_u(u)
+    corr_matrix = _validate_corr(corr)
+    if data.shape[1] != corr_matrix.shape[0]:
+        raise ValueError(
+            "Dimension mismatch between data and correlation matrix"
+        )
 
-    eps = np.finfo(np.float64).eps
-    clipped = np.clip(u_array, eps, 1.0 - eps)
+    clipped = np.clip(data, 1e-12, 1.0 - 1e-12)
     z = norm.ppf(clipped)
+    inv_corr = np.linalg.inv(corr_matrix)
+    sign, logdet = np.linalg.slogdet(corr_matrix)
+    if sign <= 0.0:
+        raise ValueError("Correlation matrix must have positive determinant")
 
-    rho_sq = rho * rho
-    one_minus_rho_sq = 1.0 - rho_sq
-    log_det = -0.5 * np.log(one_minus_rho_sq)
-
-    z1 = z[:, 0]
-    z2 = z[:, 1]
-    quad_form = (
-        (z1 * z1) - (2.0 * rho * z1 * z2) + (z2 * z2)
-    ) / one_minus_rho_sq
-    marginal_term = 0.5 * (z1 * z1 + z2 * z2)
-
-    log_density = log_det - 0.5 * quad_form + marginal_term
+    quad = np.einsum("ij,jk,ik->i", z, inv_corr, z)
+    marginal = np.sum(z**2, axis=1)
+    log_density = -0.5 * logdet - 0.5 * quad + 0.5 * marginal
     return float(np.sum(log_density))
 
 
-def student_t_pseudo_loglik(u: FloatArray, rho: float, nu: float) -> float:
-    """Compute the Student t copula pseudo log-likelihood for
-    bivariate data."""
+def student_t_pseudo_loglik(
+    u: FloatArray, corr: FloatArray, nu: float
+) -> float:
+    """Compute the Student t copula pseudo log-likelihood."""
 
-    u_array = np.asarray(u, dtype=np.float64)
-    if u_array.ndim != 2 or u_array.shape[1] != 2:
-        raise ValueError("u must be a (n, 2) array of pseudo-observations.")
-    if u_array.shape[0] == 0:
-        raise ValueError("u must contain at least one observation.")
-    if np.isnan(u_array).any():
-        raise ValueError("u must not contain NaNs.")
-    if np.any((u_array <= 0.0) | (u_array >= 1.0)):
-        raise ValueError("u must take values strictly inside (0, 1).")
-    if not np.isfinite(rho):
-        raise ValueError("rho must be finite.")
-    if not (-0.999999 < rho < 0.999999):
-        raise ValueError("rho must belong to (-1, 1) to form a correlation.")
-    if not np.isfinite(nu):
-        raise ValueError("nu must be finite.")
+    data = _validate_u(u)
     if nu <= 2.0:
-        raise ValueError("nu must be greater than 2.")
+        raise ValueError("nu must be greater than 2")
+    corr_matrix = _validate_corr(corr)
+    if data.shape[1] != corr_matrix.shape[0]:
+        raise ValueError(
+            "Dimension mismatch between data and correlation matrix"
+        )
 
-    from src.models.copulas.student_t import StudentTCopula
-
-    copula = StudentTCopula(rho=float(rho), nu=float(nu))
-    density = copula.pdf(np.asarray(u_array, dtype=np.float64))
-    if np.any(density <= 0.0):
-        raise ValueError("Copula density returned non-positive values.")
-    return float(np.sum(np.log(density)))
+    clipped = np.clip(data, 1e-12, 1.0 - 1e-12)
+    x = student_t.ppf(clipped, nu)
+    mv_t = multivariate_t(
+        loc=np.zeros(corr_matrix.shape[0]), shape=corr_matrix, df=nu
+    )
+    num = np.asarray(mv_t.pdf(x), dtype=np.float64)
+    den = np.prod(student_t.pdf(x, nu), axis=1)
+    if np.any(num <= 0.0) or np.any(den <= 0.0):
+        raise ValueError("Encountered non-positive density values")
+    log_density = np.log(num) - np.log(den)
+    return float(np.sum(log_density))
 
 
 def information_criteria(

@@ -1,4 +1,4 @@
-"""Archimedean copula families (Clayton, Gumbel, Frank)."""
+"""Archimedean copula families (Clayton, Gumbel, Frank, Joe, AMH)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.optimize import brentq  # type: ignore[import-untyped]
 from scipy.stats import levy_stable  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,19 @@ def _falling_factorial(x: float, k: int) -> float:
     for i in range(k):
         result *= x - float(i)
     return result
+
+
+def _log_derivative_sequence(values: list[float], order: int) -> list[float]:
+    """Return derivatives of ``log`` of a smooth function up to ``order``."""
+
+    log_derivs = [0.0] * (order + 1)
+    for n in range(1, order + 1):
+        term = values[n]
+        for k in range(1, n):
+            coeff = math.comb(n - 1, k - 1)
+            term -= coeff * values[k] * log_derivs[n - k]
+        log_derivs[n] = term / values[0]
+    return [log_derivs[n] for n in range(1, order + 1)]
 
 
 @lru_cache(maxsize=None)
@@ -136,6 +150,59 @@ def _psi_derivative_frank(
     poly = _polylog_negative_int(order - 1, argument)
     result = ((-1.0) ** order / theta) * poly
     return np.asarray(result, dtype=np.float64)
+
+
+def _psi_derivative_joe(
+    theta: float, order: int, t: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    values = np.asarray(t, dtype=np.float64)
+    if order == 0:
+        return np.asarray(
+            1.0 - np.power(1.0 - np.exp(-values), 1.0 / theta),
+            dtype=np.float64,
+        )
+
+    alpha = 1.0 / theta
+    flat = values.reshape(-1)
+    result = np.empty_like(flat, dtype=np.float64)
+    for idx, val in enumerate(flat):
+        total = 0.0
+        binom = alpha
+        for k in range(1, 200):
+            if k > 1:
+                binom *= (alpha - (k - 1)) / float(k)
+            magnitude = float(k) ** order
+            decay = math.exp(-float(k) * float(val))
+            term = (-1.0) ** (k + 1) * binom * magnitude * decay
+            total += term
+            if abs(term) < 1e-12:
+                break
+        result[idx] = ((-1.0) ** order) * total
+    return result.reshape(values.shape)
+
+
+def _psi_derivative_amh(
+    theta: float, order: int, t: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    values = np.asarray(t, dtype=np.float64)
+    if order == 0:
+        return np.asarray(
+            (1.0 - theta) / (np.exp(values) - theta), dtype=np.float64
+        )
+
+    flat = values.reshape(-1)
+    result = np.empty_like(flat, dtype=np.float64)
+    for idx, val in enumerate(flat):
+        exp_val = math.exp(float(val))
+        g0 = max(exp_val - theta, 1e-12)
+        derivatives = [g0]
+        for _ in range(1, order + 1):
+            derivatives.append(exp_val)
+        log_derivs = _log_derivative_sequence(derivatives, order)
+        h_derivs = [-deriv for deriv in log_derivs]
+        bell = _complete_bell_polynomial(h_derivs)
+        result[idx] = (1.0 - theta) * (1.0 / g0) * bell
+    return result.reshape(values.shape)
 
 
 def _archimedean_conditional(
@@ -375,8 +442,165 @@ class FrankCopula:
         )
 
 
+@dataclass(frozen=True)
+class JoeCopula:
+    """Joe copula with parameter ``theta >= 1``."""
+
+    theta: float
+    dim: int = 2
+
+    def __post_init__(self) -> None:
+        if self.dim < 2:
+            raise ValueError("dim must be at least 2")
+        if self.theta < 1.0:
+            raise ValueError("theta must be at least 1")
+
+    def _psi_inv(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        clipped = np.clip(u, _CLIP, 1.0 - _CLIP)
+        inner = np.power(1.0 - clipped, self.theta)
+        return np.asarray(-np.log(1.0 - inner), dtype=np.float64)
+
+    def _psi_inv_prime(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        clipped = np.clip(u, _CLIP, 1.0 - _CLIP)
+        numerator = -self.theta * np.power(1.0 - clipped, self.theta - 1.0)
+        denominator = 1.0 - np.power(1.0 - clipped, self.theta)
+        denominator = np.maximum(denominator, np.finfo(np.float64).tiny)
+        return np.asarray(numerator / denominator, dtype=np.float64)
+
+    def cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        data = _validate_samples(u, self.dim)
+        total = np.sum(self._psi_inv(data), axis=1)
+        inner = 1.0 - np.exp(-total)
+        return np.asarray(
+            1.0 - np.power(inner, 1.0 / self.theta), dtype=np.float64
+        )
+
+    def pdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        data = _validate_samples(u, self.dim)
+        clipped = np.clip(data, _CLIP, 1.0 - _CLIP)
+        total = np.sum(self._psi_inv(clipped), axis=1)
+        derivative = _psi_derivative_joe(self.theta, self.dim, total)
+        prod_term = np.prod(-self._psi_inv_prime(clipped), axis=1)
+        sign = -1.0 if self.dim % 2 == 1 else 1.0
+        return np.asarray(sign * derivative * prod_term, dtype=np.float64)
+
+    def rvs(self, n: int, seed: int | None = None) -> NDArray[np.float64]:
+        if n <= 0:
+            raise ValueError("n must be positive")
+        rng = np.random.default_rng(seed)
+        samples = np.empty((n, self.dim), dtype=np.float64)
+        for i in range(n):
+            row = np.empty(self.dim, dtype=np.float64)
+            row[0] = rng.uniform(_CLIP, 1.0 - _CLIP)
+            for j in range(1, self.dim):
+                target = rng.uniform(_CLIP, 1.0 - _CLIP)
+
+                def objective(x: float) -> float:
+                    trial = np.full(self.dim, x, dtype=np.float64)
+                    trial[:j] = row[:j]
+                    cond = _archimedean_conditional(
+                        trial[None, :],
+                        self.theta,
+                        self.dim,
+                        self._psi_inv,
+                        _psi_derivative_joe,
+                    )
+                    return float(cond[0, j] - target)
+
+                row[j] = brentq(objective, _CLIP, 1.0 - _CLIP, maxiter=256)
+            samples[i] = row
+        return samples
+
+    def cond_cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        return _archimedean_conditional(
+            u,
+            self.theta,
+            self.dim,
+            self._psi_inv,
+            _psi_derivative_joe,
+        )
+
+
+@dataclass(frozen=True)
+class AMHCopula:
+    """Ali–Mikhail–Haq copula with ``theta in [0, 1)``."""
+
+    theta: float
+    dim: int = 2
+
+    def __post_init__(self) -> None:
+        if self.dim != 2:
+            raise ValueError("AMH copula currently supports dim=2")
+        if not (-1.0 < self.theta < 1.0):
+            raise ValueError("theta must lie in (-1, 1)")
+
+    def _psi_inv(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        clipped = np.clip(u, _CLIP, 1.0 - _CLIP)
+        numerator = 1.0 - self.theta + self.theta * clipped
+        return np.asarray(np.log(numerator / clipped), dtype=np.float64)
+
+    def _psi_inv_prime(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        clipped = np.clip(u, _CLIP, 1.0 - _CLIP)
+        numerator = self.theta - 1.0
+        denominator = clipped * (1.0 - self.theta + self.theta * clipped)
+        denominator = np.maximum(denominator, np.finfo(np.float64).tiny)
+        return np.asarray(numerator / denominator, dtype=np.float64)
+
+    def cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        data = _validate_samples(u, self.dim)
+        total = np.sum(self._psi_inv(data), axis=1)
+        return np.asarray(
+            (1.0 - self.theta) / (np.exp(total) - self.theta), dtype=np.float64
+        )
+
+    def pdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        data = _validate_samples(u, self.dim)
+        clipped = np.clip(data, _CLIP, 1.0 - _CLIP)
+        total = np.sum(self._psi_inv(clipped), axis=1)
+        derivative = _psi_derivative_amh(self.theta, self.dim, total)
+        prod_term = np.prod(-self._psi_inv_prime(clipped), axis=1)
+        sign = -1.0 if self.dim % 2 == 1 else 1.0
+        return np.asarray(sign * derivative * prod_term, dtype=np.float64)
+
+    def rvs(self, n: int, seed: int | None = None) -> NDArray[np.float64]:
+        if n <= 0:
+            raise ValueError("n must be positive")
+        rng = np.random.default_rng(seed)
+        samples = np.empty((n, self.dim), dtype=np.float64)
+        for i in range(n):
+            row = np.empty(self.dim, dtype=np.float64)
+            row[0] = rng.uniform(_CLIP, 1.0 - _CLIP)
+            target = rng.uniform(_CLIP, 1.0 - _CLIP)
+
+            def objective(x: float) -> float:
+                trial = np.array([row[0], x], dtype=np.float64)
+                cond = _archimedean_conditional(
+                    trial[None, :],
+                    self.theta,
+                    self.dim,
+                    self._psi_inv,
+                    _psi_derivative_amh,
+                )
+                return float(cond[0, 1] - target)
+
+            row[1] = brentq(objective, _CLIP, 1.0 - _CLIP, maxiter=256)
+            samples[i] = row
+        return samples
+
+    def cond_cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
+        return _archimedean_conditional(
+            u,
+            self.theta,
+            self.dim,
+            self._psi_inv,
+            _psi_derivative_amh,
+        )
+
+
 __all__ = [
     "ClaytonCopula",
     "GumbelCopula",
     "FrankCopula",
+    "JoeCopula",
+    "AMHCopula",
 ]

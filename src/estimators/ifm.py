@@ -24,3 +24,27 @@ def gaussian_ifm(u: FloatArray) -> float:
     z = norm.ppf(clipped)
     corr = np.corrcoef(z.T)
     return float(corr[0, 1])
+
+
+def gaussian_ifm_corr(u: FloatArray) -> FloatArray:
+    """Return the IFM correlation matrix for an arbitrary dimension."""
+
+    u_array = np.asarray(u, dtype=np.float64)
+    if u_array.ndim != 2:
+        raise ValueError("U must be a two-dimensional array.")
+    n_obs, dim = u_array.shape
+    if n_obs < 2 or dim < 2:
+        raise ValueError(
+            "At least two observations and two dimensions are required."
+        )
+    if not np.isfinite(u_array).all():
+        raise ValueError("U must contain only finite values.")
+    if np.any((u_array <= 0.0) | (u_array >= 1.0)):
+        raise ValueError("U entries must lie strictly between 0 and 1.")
+
+    clipped = np.clip(u_array, 1e-12, 1.0 - 1e-12)
+    z = norm.ppf(clipped)
+    corr = np.corrcoef(z, rowvar=False)
+    corr = np.asarray(corr, dtype=np.float64)
+    np.fill_diagonal(corr, 1.0)
+    return corr

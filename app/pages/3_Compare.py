@@ -4,7 +4,7 @@ import importlib
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import streamlit as st
@@ -86,27 +86,46 @@ def _format_metrics(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "—"
 
 
+def _rebuild_corr(params: Mapping[str, float], dim: int) -> np.ndarray | None:
+    matrix = np.eye(dim, dtype=np.float64)
+    found = False
+    for key, value in params.items():
+        if not key.startswith("rho_"):
+            continue
+        parts = key.split("_")
+        if len(parts) != 3:
+            continue
+        try:
+            i = int(parts[1]) - 1
+            j = int(parts[2]) - 1
+        except ValueError:
+            continue
+        if not (0 <= i < dim and 0 <= j < dim):
+            continue
+        matrix[i, j] = matrix[j, i] = float(value)
+        found = True
+    return matrix if found else None
+
+
 rows: list[dict[str, Any]] = []
 for idx, result in enumerate(fit_results):
     loglik = result.loglik
     aic = result.aic
     bic = result.bic
     if result.family == "Gaussian":
-        rho = result.params.get("rho")
-        if not isinstance(rho, float):
+        corr = _rebuild_corr(result.params, dim)
+        if corr is None:
             st.warning(
-                "Gaussian model without a numeric rho parameter cannot be "
+                "Gaussian model is missing correlation entries and cannot be "
                 "ranked."
-            )
-        elif dim != 2:
-            st.warning(
-                "Gaussian model comparison is currently limited to "
-                "bivariate data."
             )
         else:
             try:
-                loglik = gaussian_pseudo_loglik(U, rho)
-                aic, bic = information_criteria(loglik, k_params=1, n=n_obs)
+                loglik = gaussian_pseudo_loglik(U, corr)
+                k_params = dim * (dim - 1) // 2
+                aic, bic = information_criteria(
+                    loglik, k_params=k_params, n=n_obs
+                )
             except ValueError as exc:
                 st.warning(f"Failed to evaluate Gaussian metrics: {exc}")
             else:
@@ -114,21 +133,20 @@ for idx, result in enumerate(fit_results):
                 session_utils.update_fit_result(idx, updated)
                 fit_results[idx] = updated
     elif result.family == "Student t":
-        rho = result.params.get("rho")
+        corr = _rebuild_corr(result.params, dim)
         nu = result.params.get("nu")
-        if not (isinstance(rho, float) and isinstance(nu, float)):
+        if corr is None or not isinstance(nu, float):
             st.warning(
-                "Student t model requires numeric rho and nu to compute "
-                "metrics."
-            )
-        elif dim != 2:
-            st.warning(
-                "Student t comparison is currently limited to bivariate data."
+                "Student t model requires correlation entries and "
+                "nu to compute metrics."
             )
         else:
             try:
-                loglik = student_t_pseudo_loglik(U, rho, nu)
-                aic, bic = information_criteria(loglik, k_params=2, n=n_obs)
+                loglik = student_t_pseudo_loglik(U, corr, nu)
+                k_params = dim * (dim - 1) // 2 + 1
+                aic, bic = information_criteria(
+                    loglik, k_params=k_params, n=n_obs
+                )
             except ValueError as exc:
                 st.warning(f"Failed to evaluate Student t metrics: {exc}")
             else:

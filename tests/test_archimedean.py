@@ -10,9 +10,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.models.copulas.archimedean import (  # noqa: E402
+    AMHCopula,
     ClaytonCopula,
     FrankCopula,
     GumbelCopula,
+    JoeCopula,
 )
 
 
@@ -38,6 +40,24 @@ def test_gumbel_pdf_positive() -> None:
 def test_frank_pdf_positive() -> None:
     copula = FrankCopula(theta=4.0, dim=3)
     u = copula.rvs(200, seed=987)
+    density = copula.pdf(u)
+    assert density.shape == (200,)
+    assert np.all(np.isfinite(density))
+    assert np.all(density > 0.0)
+
+
+def test_joe_pdf_positive() -> None:
+    copula = JoeCopula(theta=1.6, dim=3)
+    u = copula.rvs(150, seed=2024)
+    density = copula.pdf(u)
+    assert density.shape == (150,)
+    assert np.all(np.isfinite(density))
+    assert np.all(density > 0.0)
+
+
+def test_amh_pdf_positive() -> None:
+    copula = AMHCopula(theta=0.5)
+    u = copula.rvs(200, seed=99)
     density = copula.pdf(u)
     assert density.shape == (200,)
     assert np.all(np.isfinite(density))

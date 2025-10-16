@@ -11,22 +11,28 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.models.copulas.archimedean import (  # noqa: E402
+    AMHCopula,
     ClaytonCopula,
     FrankCopula,
     GumbelCopula,
+    JoeCopula,
 )
 from src.models.copulas.student_t import StudentTCopula  # noqa: E402
 from src.utils.rosenblatt import (  # noqa: E402
+    cond_cdf_amh,
     cond_cdf_clayton,
     cond_cdf_frank,
     cond_cdf_gumbel,
+    cond_cdf_joe,
     cond_cdf_student_t,
     gof_cvm_uniform,
     gof_ks_uniform,
+    rosenblatt_amh,
     rosenblatt_clayton,
     rosenblatt_frank,
     rosenblatt_gaussian,
     rosenblatt_gumbel,
+    rosenblatt_joe,
     rosenblatt_student_t,
 )
 
@@ -92,6 +98,22 @@ def test_cond_cdf_frank_vectorized() -> None:
     assert np.all((0.0 < result) & (result < 1.0))
 
 
+def test_cond_cdf_joe_vectorized() -> None:
+    copula = JoeCopula(theta=1.5, dim=3)
+    U = copula.rvs(64, seed=222)
+    result = cond_cdf_joe(U, theta=1.5)
+    assert result.shape == U.shape
+    assert np.all((0.0 < result) & (result < 1.0))
+
+
+def test_cond_cdf_amh_bivariate() -> None:
+    copula = AMHCopula(theta=0.6)
+    U = copula.rvs(128, seed=333)
+    result = cond_cdf_amh(U, theta=0.6)
+    assert result.shape == U.shape
+    assert np.all((0.0 < result) & (result < 1.0))
+
+
 def test_rosenblatt_archimedean_outputs_uniforms() -> None:
     copula = ClaytonCopula(theta=2.0, dim=3)
     U = copula.rvs(200, seed=77)
@@ -110,3 +132,13 @@ def test_rosenblatt_archimedean_outputs_uniforms() -> None:
     U_f = frank.rvs(200, seed=987)
     Z_frank, _, _ = rosenblatt_frank(U_f, theta=4.0)
     assert np.all((0.0 < Z_frank) & (Z_frank < 1.0))
+
+    joe = JoeCopula(theta=1.7, dim=3)
+    U_j = joe.rvs(200, seed=4321)
+    Z_joe, _, _ = rosenblatt_joe(U_j, theta=1.7)
+    assert np.all((0.0 < Z_joe) & (Z_joe < 1.0))
+
+    amh = AMHCopula(theta=0.5)
+    U_a = amh.rvs(200, seed=2468)
+    Z_amh, _, _ = rosenblatt_amh(U_a, theta=0.5)
+    assert np.all((0.0 < Z_amh) & (Z_amh < 1.0))

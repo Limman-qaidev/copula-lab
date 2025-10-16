@@ -7,9 +7,11 @@ from numpy.typing import NDArray
 from scipy import stats  # type: ignore[import-untyped]
 
 from src.models.copulas.archimedean import (
+    AMHCopula,
     ClaytonCopula,
     FrankCopula,
     GumbelCopula,
+    JoeCopula,
 )
 
 from .types import FloatArray
@@ -124,6 +126,20 @@ def cond_cdf_frank(u: NDArray[np.float64], theta: float) -> FloatArray:
     return copula.cond_cdf(data)
 
 
+def cond_cdf_joe(u: NDArray[np.float64], theta: float) -> FloatArray:
+    data = _validate_u(u)
+    copula = JoeCopula(theta=float(theta), dim=data.shape[1])
+    return copula.cond_cdf(data)
+
+
+def cond_cdf_amh(u: NDArray[np.float64], theta: float) -> FloatArray:
+    data = _validate_u(u)
+    if data.shape[1] != 2:
+        raise ValueError("AMH conditional transform currently supports d=2")
+    copula = AMHCopula(theta=float(theta))
+    return copula.cond_cdf(data)
+
+
 def rosenblatt(
     u: NDArray[np.float64],
     cond_cdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
@@ -228,6 +244,28 @@ def rosenblatt_frank(
     u: NDArray[np.float64], theta: float
 ) -> tuple[FloatArray, float, float]:
     transformed = rosenblatt(u, lambda w: cond_cdf_frank(w, theta=theta))
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_joe(
+    u: NDArray[np.float64], theta: float
+) -> tuple[FloatArray, float, float]:
+    transformed = rosenblatt(u, lambda w: cond_cdf_joe(w, theta=theta))
+    return (
+        transformed,
+        gof_ks_uniform(transformed),
+        gof_cvm_uniform(transformed),
+    )
+
+
+def rosenblatt_amh(
+    u: NDArray[np.float64], theta: float
+) -> tuple[FloatArray, float, float]:
+    transformed = rosenblatt(u, lambda w: cond_cdf_amh(w, theta=theta))
     return (
         transformed,
         gof_ks_uniform(transformed),
