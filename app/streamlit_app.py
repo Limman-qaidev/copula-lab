@@ -1,32 +1,103 @@
+import sys
+from pathlib import Path
+
 import streamlit as st
 
-st.set_page_config(page_title="Copula Lab", layout="wide")
-st.title("Copula Lab")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
-st.markdown(
-    """
-Calibrate and compare **copulas** on financial data with live diagnostics.
-
-**Quick start**
-1. Go to **Data** to upload a CSV/Parquet and select columns.
-2. Go to **Calibrate** to fit a copula (placeholder in this step).
-3. Use **Compare** and **Study** to explore models and theory.
-"""
+st.set_page_config(
+    page_title="Copula Lab · Home",
+    page_icon="📈",
+    layout="wide",
 )
+st.title("Home")
+st.caption("Interactive laboratory to study and calibrate copulas.")
 
-# Handy links to pages
-st.page_link("pages/1_Data.py", label="→ Data", icon="📄")
-st.page_link("pages/2_Calibrate.py", label="→ Calibrate", icon="⚙️")
-st.page_link("pages/3_Compare.py", label="→ Compare", icon="📊")
-st.page_link("pages/4_Study.py", label="→ Study", icon="📚")
-st.page_link("pages/5_Sandbox.py", label="→ Sandbox", icon="🧪")
+hero_left, hero_right = st.columns((2, 1))
 
-with st.sidebar:
-    st.header("Session")
-    df = st.session_state.get("data_df")
-    if df is None:
-        st.info("No dataset loaded.")
-    else:
+with hero_left:
+    st.markdown(
+        """
+### Welcome to Copula Lab
+
+Upload your data, calibrate copula models, and visualize the
+results with tooling crafted for quantitative practitioners.
+Follow the recommended flow or explore each page independently.
+"""
+    )
+
+    st.markdown(
+        """
+**Suggested flow**
+1. **Data**: upload your dataset, choose the relevant columns,
+   and build the PIT.
+2. **Calibrate**: fit parametric copulas with metrics and logging.
+3. **Compare**: contrast candidates and inspect diagnostic charts.
+4. **Study**: consult notes, formulas, and reference material.
+"""
+    )
+
+with hero_right:
+    st.markdown("#### Quick status")
+    st.metric("Supported dimensionality", "Multivariate")
+    st.metric("Default seed", "42")
+    st.info(
+        "Head to *Data* to start, or use the links below to jump to any "
+        "module."
+    )
+
+st.divider()
+
+cards = st.columns(3)
+card_texts = [
+    (
+        "📄 Data",
+        "Load multivariate CSVs and work with pseudo-observations in (0, 1).",
+        "pages/1_Data.py",
+    ),
+    (
+        "⚙️ Calibrate",
+        "Estimate parameters, manage seeds, and monitor convergence.",
+        "pages/2_Calibrate.py",
+    ),
+    (
+        "📊 Compare",
+        "Contrast copulas, inspect tail dependence, and quantify risks.",
+        "pages/3_Compare.py",
+    ),
+]
+
+for column, (title, description, target) in zip(cards, card_texts):
+    with column:
+        st.subheader(title)
+        st.write(description)
+        st.page_link(target, label="Open", icon="➡️")
+
+st.page_link("pages/4_Study.py", label="📚 Open Study", icon="📘")
+st.page_link("pages/5_Sandbox.py", label="🧪 Explore Sandbox", icon="🧪")
+
+st.divider()
+
+resources, session_panel = st.columns((2, 1))
+
+with resources:
+    st.markdown(
+        """
+### Quick resources
+- Technical documentation in `docs/` with theory and worked examples.
+- Reproducible experiments inside `notebooks/`.
+- Utility scripts under `src/utils/` ready to be reused.
+"""
+    )
+
+with session_panel:
+    st.markdown("### Session status")
+    if "U" in st.session_state:
+        U = st.session_state["U"]
         st.success(
-            f"Dataset in session: {df.shape[0]} rows × {df.shape[1]} cols"
+            f"Pseudo-observations available: n={U.shape[0]}, d={U.shape[1]}"
         )
+    else:
+        st.info("Pseudo-observations have not been generated yet.")
