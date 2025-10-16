@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib
+import inspect
 import io
 import logging
 import sys
@@ -23,23 +24,33 @@ from src.utils.transforms import empirical_pit  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+def _supports_width_kwarg(renderer: Any) -> bool:
+    try:
+        signature = inspect.signature(renderer)
+    except (TypeError, ValueError):
+        return False
+    return "width" in signature.parameters
+
+
 def _show_altair_chart(chart: Any) -> None:
-    """Render an Altair chart with responsive width."""
+    """Render an Altair chart with responsive width when available."""
 
     altair_renderer = getattr(st, "altair_chart")
-    altair_renderer(chart, width="stretch")
+    if _supports_width_kwarg(altair_renderer):
+        altair_renderer(chart, width="stretch")
+    else:
+        altair_renderer(chart, use_container_width=True)
 
-def _extract_header(raw: bytes, encoding: str) -> List[str]:
-    with _safe_decode(raw, encoding) as buffer:
-        reader = csv.reader(buffer)
-        try:
-            header = next(reader)
-        except StopIteration as exc:
-            raise ValueError("The uploaded file is empty.") from exc
 
-    if len(header) < 2:
-        raise ValueError("The CSV must contain at least two columns.")
-    return header
+def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
+    dataframe_renderer = getattr(st, "dataframe")
+    if _supports_width_kwarg(dataframe_renderer):
+        dataframe_renderer(data, width="stretch", hide_index=hide_index)
+    else:
+        dataframe_renderer(
+            data, use_container_width=True, hide_index=hide_index
+        )
+
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
@@ -115,12 +126,10 @@ def _render_preview_table(data: np.ndarray, columns: List[str]) -> None:
     if pandas_spec is not None:
         pandas_module = importlib.import_module("pandas")
         frame = pandas_module.DataFrame(subset, columns=columns)
-        st.dataframe(frame, width="stretch", hide_index=True)
+        _show_dataframe(data=frame)
     else:
-        st.dataframe(
-            {column: subset[:, idx] for idx, column in enumerate(columns)},
-            width="stretch",
-            hide_index=True,
+        _show_dataframe(
+            data={column: subset[:, idx] for idx, column in enumerate(columns)}
         )
 
 
@@ -148,8 +157,9 @@ def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
                     f"Column '{column}' has no finite values in the preview."
                 )
                 continue
+            frame_series = series.to_frame(name=column)
             chart = (
-                altair_module.Chart(series.to_frame())
+                altair_module.Chart(frame_series)
                 .mark_bar(color="#2563eb")
                 .encode(
                     x=altair_module.X(
@@ -160,7 +170,6 @@ def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
                 )
                 .properties(height=220)
             )
-            chart = chart.properties(width="container")
             _show_altair_chart(chart)
         return
 
@@ -289,17 +298,8 @@ tmp_path.unlink(missing_ok=True)
 logger.info("Stored pseudo-observations: n=%d d=%d", *U.shape)
 
 session_utils.set_U(U)
+session_utils.set_dataset(data, selected_columns)
 st.session_state["U_columns"] = tuple(selected_columns)
-
-pandas_spec = importlib.util.find_spec("pandas")
-if pandas_spec is not None:
-    pandas_module = importlib.import_module("pandas")
-    st.session_state["data_df"] = pandas_module.DataFrame(
-        data,
-        columns=list(selected_columns),
-    )
-else:
-    st.session_state["data_df"] = data
 
 st.success(
     "Pseudo-observations saved to the session: "
@@ -319,20 +319,12 @@ with summary_tab:
     if importlib.util.find_spec("pandas") is not None:
         pandas_module = importlib.import_module("pandas")
         preview_frame = pandas_module.DataFrame(preview, columns=column_labels)
-        st.dataframe(
-            preview_frame,
-            hide_index=True,
-            width="stretch",
-        )
+        _show_dataframe(data=preview_frame)
     else:
         preview_dict = {
             label: preview[:, idx] for idx, label in enumerate(column_labels)
         }
-        st.dataframe(
-            preview_dict,
-            hide_index=True,
-            width="stretch",
-        )
+        _show_dataframe(data=preview_dict)
 
 with scatter_tab:
     if U.shape[1] < 2:

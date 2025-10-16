@@ -83,13 +83,6 @@ def _run_gaussian_ifm(U: FloatArray) -> FitResult:
         st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
         st.stop()
 
-    U_raw = session_utils.get_U()
-    if U_raw is None:
-        st.error(
-            "Failed to retrieve pseudo-observations from the session state."
-        )
-        st.stop()
-
 def _run_student_ifm(U: FloatArray) -> FitResult:
     rho_hat, nu_hat = student_t_ifm(U)
     loglik = student_t_pseudo_loglik(U, rho_hat, nu_hat)

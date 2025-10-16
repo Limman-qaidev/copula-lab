@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, cast
+from typing import List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 import streamlit as st
@@ -39,6 +39,24 @@ def get_U() -> Optional[FloatArray]:
     if "U" not in st.session_state:
         return None
     return cast(FloatArray, st.session_state["U"])
+
+
+def set_dataset(data: FloatArray, columns: Sequence[str]) -> None:
+    """Persist the numeric dataset and column labels."""
+
+    st.session_state["dataset_values"] = (
+        np.asarray(data, dtype=np.float64),
+        tuple(columns),
+    )
+
+
+def get_dataset() -> Optional[Tuple[FloatArray, Tuple[str, ...]]]:
+    """Retrieve the stored dataset and associated column labels."""
+
+    if "dataset_values" not in st.session_state:
+        return None
+    data, columns = st.session_state["dataset_values"]
+    return cast(FloatArray, np.asarray(data, dtype=np.float64)), tuple(columns)
 
 
 def append_fit_result(result: FitResult) -> None:
