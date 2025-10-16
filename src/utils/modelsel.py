@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import norm, multivariate_normal
+from scipy.stats import (  # type: ignore[import-untyped]
+    multivariate_normal,
+    norm,
+)
 
 
 def gaussian_pseudo_loglik(u: NDArray[np.float64], rho: float) -> float:
@@ -21,7 +24,7 @@ def gaussian_pseudo_loglik(u: NDArray[np.float64], rho: float) -> float:
 
 
 def information_criteria(
-        loglik: float, k_params: int, n: int
+    loglik: float, k_params: int, n: int
 ) -> tuple[float, float]:
     """
     AIC = 2k - 2ℓ ;  BIC = k log n - 2ℓ

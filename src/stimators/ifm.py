@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import norm
+from scipy.stats import norm  # type: ignore[import-untyped]
 
 
 def gaussian_ifm(u: NDArray[np.float64]) -> float:
