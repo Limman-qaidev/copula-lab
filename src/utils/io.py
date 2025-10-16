@@ -38,27 +38,25 @@ def read_csv_columns(
 
     file_path = Path(path)
     if not file_path.exists():
-        raise ValueError(f"El archivo no existe: {file_path}")
+        raise ValueError(f"File not found: {file_path}")
 
     if not columns:
-        raise ValueError("Debes seleccionar al menos una columna.")
+        raise ValueError("Select at least one column.")
 
     dataset: Optional[NDArray[np.float64]] = None
-
 
     pandas_spec = importlib.util.find_spec("pandas")
     if pandas_spec is not None:
         pandas_module: Any = importlib.import_module("pandas")
         try:
             frame = pandas_module.read_csv(
-
                 file_path,
                 usecols=list(columns),
                 encoding=encoding,
             )
         except ValueError as exc:  # missing columns or parse issue
             raise ValueError(
-                "No se pudieron leer las columnas solicitadas del CSV."
+                "Unable to load the requested columns from the CSV."
             ) from exc
 
         numeric = frame.apply(pandas_module.to_numeric, errors="coerce")
@@ -70,13 +68,13 @@ def read_csv_columns(
             try:
                 header = next(reader)
             except StopIteration as exc:
-                raise ValueError("El CSV está vacío.") from exc
+                raise ValueError("The CSV file is empty.") from exc
 
         try:
             indices = [header.index(col) for col in columns]
         except ValueError as exc:
             raise ValueError(
-                "Columnas solicitadas ausentes en el encabezado del CSV."
+                "The requested columns are missing from the CSV header."
             ) from exc
 
         raw = np.genfromtxt(
@@ -89,7 +87,7 @@ def read_csv_columns(
         )
 
         if raw.size == 0:
-            raise ValueError("El CSV no contiene datos numéricos.")
+            raise ValueError("The CSV does not contain numeric data.")
 
         array = np.asarray(raw, dtype=np.float64)
         if array.ndim == 1:
@@ -97,11 +95,11 @@ def read_csv_columns(
         dataset = array
 
     if dataset.ndim != 2:
-        raise ValueError("El CSV debe producir una matriz bidimensional.")
+        raise ValueError("The CSV must produce a two-dimensional array.")
 
     if dataset.shape[1] != len(columns):
         raise ValueError(
-            "Las columnas seleccionadas no se pudieron procesar correctamente."
+            "The selected columns could not be processed consistently."
         )
 
     finite_mask = np.isfinite(dataset)
@@ -110,14 +108,14 @@ def read_csv_columns(
         dataset = dataset[keep_rows, :]
         if dataset.size == 0:
             raise ValueError(
-                "No hay observaciones válidas tras eliminar filas con NaN."
+                "No valid observations remain after dropping missing rows."
             )
     elif not np.all(finite_mask):
-        raise ValueError("Se encontraron valores no numéricos o NaN.")
+        raise ValueError("Non-numeric or missing values were found.")
 
     n_obs = dataset.shape[0]
     if n_obs < 20:
-        raise ValueError("Se requieren al menos 20 observaciones.")
+        raise ValueError("At least 20 observations are required.")
 
     return np.asarray(dataset, dtype=np.float64)
 

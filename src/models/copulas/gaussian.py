@@ -5,12 +5,10 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
-
 from scipy.stats import (  # type: ignore[import-untyped]
     multivariate_normal,
     norm,
 )
-
 
 logger = logging.getLogger(__name__)
 

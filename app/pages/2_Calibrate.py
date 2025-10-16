@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING, Union, cast
 import numpy as np
 import streamlit as st
 
+if TYPE_CHECKING:
+    import pandas as pd  # type: ignore[import-untyped]
+
+DataFrameLike = Union[np.ndarray, "pd.DataFrame"]
+
 st.title("Calibrate (placeholder)")
 
 raw_data = st.session_state.get("data_df")

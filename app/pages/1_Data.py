@@ -7,8 +7,9 @@ import logging
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
+import numpy as np
 import streamlit as st
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -26,7 +27,7 @@ def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
         return io.TextIOWrapper(io.BytesIO(raw), encoding=encoding)
     except LookupError as exc:  # invalid encoding name
-        raise ValueError(f"Codificación inválida: {encoding}") from exc
+        raise ValueError(f"Invalid encoding provided: {encoding}") from exc
 
 
 def _extract_header(raw: bytes, encoding: str) -> List[str]:
@@ -35,10 +36,10 @@ def _extract_header(raw: bytes, encoding: str) -> List[str]:
         try:
             header = next(reader)
         except StopIteration as exc:
-            raise ValueError("El archivo está vacío.") from exc
+            raise ValueError("The uploaded file is empty.") from exc
 
     if len(header) < 2:
-        raise ValueError("Se requieren al menos dos columnas en el CSV.")
+        raise ValueError("The CSV must contain at least two columns.")
     return header
 
 
@@ -46,39 +47,112 @@ def _display_preview(
     raw: bytes,
     columns: Iterable[str],
     encoding: str,
-) -> None:
+    header: List[str],
+) -> np.ndarray:
+    selected = list(columns)
+    if not selected:
+        raise ValueError("Select at least one column for the preview.")
+
     pandas_spec = importlib.util.find_spec("pandas")
-    if pandas_spec is None:
+    if pandas_spec is not None:
+        pandas_module = importlib.import_module("pandas")
+        with io.BytesIO(raw) as buffer:
+            frame = pandas_module.read_csv(buffer, encoding=encoding)
+        preview: np.ndarray = frame[selected].to_numpy(dtype=np.float64)
+        preview_frame = frame[selected].head(200)
+        st.subheader("Preview (first 200 rows)")
+        st.dataframe(preview_frame, use_container_width=True, hide_index=True)
+        return preview
+
+    indices: List[int] = []
+    for column in selected:
+        try:
+            indices.append(header.index(column))
+        except ValueError as exc:  # pragma: no cover - guarded by header usage
+            raise ValueError(
+                f"Column '{column}' is not present in the header."
+            ) from exc
+
+    with io.BytesIO(raw) as buffer:
+        array = np.genfromtxt(
+            buffer,
+            delimiter=",",
+            skip_header=1,
+            usecols=tuple(indices),
+            dtype=np.float64,
+            encoding=encoding,
+        )
+
+    if array.size == 0:
+        raise ValueError("The CSV preview could not be constructed.")
+
+    preview_array = np.asarray(array, dtype=np.float64)
+    if preview_array.ndim == 1:
+        preview_array = np.reshape(preview_array, (preview_array.size, 1))
+
+    subset = preview_array[: min(200, preview_array.shape[0]), :]
+    preview_dict = {
+        column: subset[:, idx] for idx, column in enumerate(selected)
+    }
+    st.subheader("Preview (first 200 rows)")
+    st.dataframe(
+        preview_dict,
+        use_container_width=True,
+        hide_index=True,
+    )
+    return preview_array
+
+
+def _display_histograms(data: np.ndarray, columns: Iterable[str]) -> None:
+    selected = list(columns)
+    if data.size == 0 or not selected:
         return
 
-    pandas_module = importlib.import_module("pandas")
-    with io.BytesIO(raw) as buffer:
+    st.subheader("Column histograms (preview slice)")
+    for idx, column in enumerate(selected):
+        values = data[: min(200, data.shape[0]), idx]
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            st.warning(f"Column '{column}' has no finite values in preview.")
+            continue
+        hist, bin_edges = np.histogram(finite, bins=20)
         try:
-            frame = pandas_module.read_csv(buffer, encoding=encoding)
-        except Exception:  # pragma: no cover - fallback handled elsewhere
-            return
+            import matplotlib.pyplot as plt
+        except ImportError:
+            st.bar_chart(hist.astype(np.int64))
+            st.caption(
+                "Matplotlib not installed; displaying counts without bin "
+                "labels."
+            )
+            continue
 
-    preview_columns = list(columns)
-    preview_frame = frame[preview_columns].head(25)
-    st.dataframe(preview_frame, use_container_width=True, hide_index=True)
+        fig, ax = plt.subplots()
+        ax.hist(
+            finite, bins=bin_edges.tolist(), color="#2563eb", edgecolor="white"
+        )
+        ax.set_title(f"Distribution of {column}")
+        ax.set_xlabel(column)
+        ax.set_ylabel("Frequency")
+        st.pyplot(fig)
+        plt.close(fig)
 
 
 st.title("Data")
-st.caption("Carga datos, selecciona columnas y genera pseudo-observaciones.")
+st.caption("Upload data, choose columns, and build pseudo-observations.")
 
 with st.container():
     config_col, action_col = st.columns((2, 1))
 
     with config_col:
-        encoding = st.text_input("Codificación", value="utf-8")
-        uploaded = st.file_uploader("Archivo CSV", type=["csv"])
+        encoding = st.text_input("Encoding", value="utf-8")
+        uploaded = st.file_uploader("CSV file", type=["csv"])
         drop_nan = st.checkbox(
-            "Eliminar filas con valores faltantes antes de construir U",
+            "Drop rows with missing values before building U",
             value=True,
         )
 
     if uploaded is None:
-        st.info("Carga un archivo CSV para comenzar.")
+        st.info("Upload a CSV file to get started.")
         st.stop()
 
     raw_bytes = uploaded.getvalue()
@@ -93,24 +167,34 @@ with st.container():
 
     with action_col:
         selected_columns = st.multiselect(
-            "Columnas (elige al menos dos)",
+            "Columns (pick at least two)",
             options=header_columns,
             default=default_selection,
         )
-        build = st.button("Construir U (PIT empírico)", type="primary")
+        build = st.button("Build U (empirical PIT)", type="primary")
 
     if not selected_columns:
-        st.warning("Selecciona columnas para continuar.")
+        st.warning("Select one or more columns to continue.")
         st.stop()
 
     if len(selected_columns) < 2:
-        st.warning("Elige al menos dos columnas para construir una cópula.")
+        st.warning("Choose at least two columns to construct a copula.")
         st.stop()
 
-_display_preview(raw_bytes, selected_columns, encoding)
+preview_data: Optional[np.ndarray]
+
+try:
+    preview_data = _display_preview(
+        raw_bytes, selected_columns, encoding, header_columns
+    )
+except ValueError as exc:
+    st.warning(str(exc))
+    preview_data = None
+else:
+    _display_histograms(preview_data, selected_columns)
 
 if not build:
-    st.info("Pulsa el botón para generar pseudo-observaciones.")
+    st.info("Press the button to generate pseudo-observations.")
     st.stop()
 
 with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
@@ -130,7 +214,7 @@ except ValueError as exc:
     st.stop()
 
 logger.info(
-    "Datos cargados correctamente: archivo=%s columnas=%s n=%d",
+    "Loaded dataset successfully: file=%s columns=%s n=%d",
     uploaded.name,
     ", ".join(selected_columns),
     data.shape[0],
@@ -145,7 +229,7 @@ except ValueError as exc:
 
 tmp_path.unlink(missing_ok=True)
 
-logger.info("Pseudo-observaciones almacenadas: n=%d d=%d", *U.shape)
+logger.info("Stored pseudo-observations: n=%d d=%d", *U.shape)
 
 session_utils.set_U(U)
 st.session_state["U_columns"] = tuple(selected_columns)
@@ -161,16 +245,16 @@ else:
     st.session_state["data_df"] = data
 
 st.success(
-    "Se generaron pseudo-observaciones en sesión: "
+    "Pseudo-observations saved to the session: "
     f"n={U.shape[0]}, d={U.shape[1]}"
 )
 
 if U.shape[1] >= 2:
-    st.caption("Visualización de las dos primeras dimensiones de U.")
+    st.caption("Scatter of the first two dimensions of U.")
     chart_data = {f"U{i + 1}": U[:, i] for i in range(2)}
     st.scatter_chart(chart_data)
 else:
-    st.info("U es univariado; no se muestra gráfico de dispersión.")
+    st.info("U is univariate; the scatter plot is skipped.")
 
 preview_rows = min(10, U.shape[0])
 preview = U[:preview_rows, :]
@@ -197,6 +281,6 @@ else:
     )
 
 st.info(
-    "Puedes continuar con la pestaña **Calibrate** para ajustar modelos con"
-    " las pseudo-observaciones almacenadas."
+    "Continue with the **Calibrate** tab to fit models using "
+    "the stored pseudo-observations."
 )

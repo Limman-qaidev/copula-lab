@@ -13,14 +13,14 @@ def empirical_pit(x: NDArray[np.float64]) -> NDArray[np.float64]:
     """
 
     if x.ndim != 2:
-        raise ValueError("La matriz debe ser bidimensional.")
+        raise ValueError("Input data must be two-dimensional.")
 
     if not np.isfinite(x).all():
-        raise ValueError("Los datos contienen valores no finitos o NaN.")
+        raise ValueError("Input data contains non-finite values or NaN.")
 
     n_obs, n_dim = x.shape
     if n_obs == 0:
-        raise ValueError("Se requieren observaciones para construir el PIT.")
+        raise ValueError("At least one observation is required for the PIT.")
 
     ranks = np.empty_like(x, dtype=np.float64)
 

@@ -13,38 +13,39 @@ st.set_page_config(
     layout="wide",
 )
 st.title("Home")
-st.caption("Laboratorio interactivo para estudiar y calibrar cópulas.")
+st.caption("Interactive laboratory to study and calibrate copulas.")
 
 hero_left, hero_right = st.columns((2, 1))
 
 with hero_left:
     st.markdown(
         """
-### Bienvenido a Copula Lab
+### Welcome to Copula Lab
 
-Pon tus datos en contexto, calibra modelos copulares y visualiza los
-resultados con herramientas diseñadas para analistas cuantitativos.
-Sigue el flujo recomendado o explora libremente las páginas.
+Upload your data, calibrate copula models, and visualize the
+results with tooling crafted for quantitative practitioners.
+Follow the recommended flow or explore each page independently.
 """
     )
 
     st.markdown(
         """
-**Flujo sugerido**
-1. **Data**: carga tu dataset, define las columnas relevantes y genera el PIT.
-2. **Calibrate**: ajusta cópulas paramétricas con métricas y logs.
-3. **Compare**: enfrenta alternativas y revisa gráficos diagnósticos.
-4. **Study**: accede a notas, fórmulas y enlaces de referencia.
+**Suggested flow**
+1. **Data**: upload your dataset, choose the relevant columns,
+   and build the PIT.
+2. **Calibrate**: fit parametric copulas with metrics and logging.
+3. **Compare**: contrast candidates and inspect diagnostic charts.
+4. **Study**: consult notes, formulas, and reference material.
 """
     )
 
 with hero_right:
-    st.markdown("#### Estado rápido")
-    st.metric("Dimensión soportada", "Multivariante")
-    st.metric("Semilla por defecto", "42")
+    st.markdown("#### Quick status")
+    st.metric("Supported dimensionality", "Multivariate")
+    st.metric("Default seed", "42")
     st.info(
-        "Accede a *Data* para comenzar o utiliza los enlaces inferiores "
-        "para saltar directamente a cualquier módulo."
+        "Head to *Data* to start, or use the links below to jump to any "
+        "module."
     )
 
 st.divider()
@@ -52,21 +53,18 @@ st.divider()
 cards = st.columns(3)
 card_texts = [
     (
-        "📄 Datos",
-        (
-            "Carga CSVs multivariados y trabaja con pseudo-observaciones "
-            "en (0,1)."
-        ),
+        "📄 Data",
+        "Load multivariate CSVs and work with pseudo-observations in (0, 1).",
         "pages/1_Data.py",
     ),
     (
-        "⚙️ Calibración",
-        "Estima parámetros, controla semillas y supervisa convergencia.",
+        "⚙️ Calibrate",
+        "Estimate parameters, manage seeds, and monitor convergence.",
         "pages/2_Calibrate.py",
     ),
     (
-        "📊 Comparativa",
-        "Contrasta copulas, examina dependencias tail y cuantifica riesgos.",
+        "📊 Compare",
+        "Contrast copulas, inspect tail dependence, and quantify risks.",
         "pages/3_Compare.py",
     ),
 ]
@@ -75,10 +73,10 @@ for column, (title, description, target) in zip(cards, card_texts):
     with column:
         st.subheader(title)
         st.write(description)
-        st.page_link(target, label="Abrir", icon="➡️")
+        st.page_link(target, label="Open", icon="➡️")
 
-st.page_link("pages/4_Study.py", label="📚 Accede a Study", icon="📘")
-st.page_link("pages/5_Sandbox.py", label="🧪 Explorar Sandbox", icon="🧪")
+st.page_link("pages/4_Study.py", label="📚 Open Study", icon="📘")
+st.page_link("pages/5_Sandbox.py", label="🧪 Explore Sandbox", icon="🧪")
 
 st.divider()
 
@@ -87,19 +85,19 @@ resources, session_panel = st.columns((2, 1))
 with resources:
     st.markdown(
         """
-### Recursos rápidos
-- Documentación técnica en `docs/` con teoría y ejemplos.
-- Cuadernos en `notebooks/` para experimentos reproducibles.
-- Scripts utilitarios en `src/utils/` listos para reutilizar.
+### Quick resources
+- Technical documentation in `docs/` with theory and worked examples.
+- Reproducible experiments inside `notebooks/`.
+- Utility scripts under `src/utils/` ready to be reused.
 """
     )
 
 with session_panel:
-    st.markdown("### Estado de la sesión")
+    st.markdown("### Session status")
     if "U" in st.session_state:
         U = st.session_state["U"]
         st.success(
-            f"Pseudo-observaciones disponibles: n={U.shape[0]}, d={U.shape[1]}"
+            f"Pseudo-observations available: n={U.shape[0]}, d={U.shape[1]}"
         )
     else:
-        st.info("Aún no se han generado pseudo-observaciones.")
+        st.info("Pseudo-observations have not been generated yet.")
