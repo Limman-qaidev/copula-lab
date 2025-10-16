@@ -6,48 +6,104 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import kstest, norm  # type: ignore[import-untyped]
 
+from .types import FloatArray
 
-def cond_cdf_gaussian(
-    u: NDArray[np.float64], rho: float
-) -> NDArray[np.float64]:
-    """Conditional CDF ``C_{2|1}(u₂|u₁)`` for a Gaussian copula."""
-    u = np.asarray(u, dtype=float)
-    if u.ndim != 2 or u.shape[1] != 2:
-        raise ValueError("u must be (n,2)")
-    z1 = norm.ppf(np.clip(u[:, 0], 1e-12, 1 - 1e-12))
-    z2 = norm.ppf(np.clip(u[:, 1], 1e-12, 1 - 1e-12))
-    denom = float(np.sqrt(max(1e-16, 1.0 - rho * rho)))
-    values = (z2 - rho * z1) / denom
-    return np.asarray(norm.cdf(values), dtype=np.float64)
+_CLIP = 1e-12
 
 
-def rosenblatt_2d(
+def _validate_u(u: NDArray[np.float64]) -> FloatArray:
+    array = np.asarray(u, dtype=float)
+    if array.ndim != 2 or array.shape[1] < 2:
+        raise ValueError("u must be a (n, d) array with d >= 2")
+    if not np.isfinite(array).all():
+        raise ValueError("u must contain only finite values")
+    if np.any((array <= 0.0) | (array >= 1.0)):
+        raise ValueError("u must have entries strictly inside (0, 1)")
+    return np.asarray(array, dtype=np.float64)
+
+
+def cond_cdf_gaussian(u: NDArray[np.float64], rho: float) -> FloatArray:
+    """Return conditional CDFs for an equicorrelated Gaussian copula.
+
+    Parameters
+    ----------
+    u:
+        Array of pseudo-observations in ``(0, 1)^d`` with ``d >= 2``.
+    rho:
+        Equicorrelation parameter shared across dimensions.
+
+    Returns
+    -------
+    FloatArray
+        The Rosenblatt components ``[u1, C_{2|1}, ..., C_{d|1..d-1}]``.
+    """
+
+    data = _validate_u(u)
+    if not (-0.999999 < rho < 0.999999):
+        raise ValueError("rho must lie inside (-1, 1)")
+
+    _, d = data.shape
+    if d >= 2 and rho <= -1.0 / (d - 1):
+        raise ValueError("rho too negative for equicorrelation")
+
+    corr = (1.0 - rho) * np.eye(d) + rho * np.ones((d, d))
+    z = norm.ppf(np.clip(data, _CLIP, 1.0 - _CLIP))
+
+    result = np.empty_like(data)
+    result[:, 0] = np.clip(data[:, 0], _CLIP, 1.0 - _CLIP)
+
+    for j in range(1, d):
+        sigma11 = corr[:j, :j]
+        sigma21 = corr[j, :j]
+        weights = np.linalg.solve(sigma11, sigma21)
+        cond_var = 1.0 - float(sigma21 @ weights)
+        if cond_var <= 0.0:
+            raise ValueError("conditional variance must be positive")
+        cond_mean = z[:, :j] @ weights
+        standardized = (z[:, j] - cond_mean) / np.sqrt(cond_var)
+        result[:, j] = np.clip(norm.cdf(standardized), _CLIP, 1.0 - _CLIP)
+
+    return np.asarray(result, dtype=np.float64)
+
+
+def rosenblatt(
     u: NDArray[np.float64],
     cond_cdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
-) -> NDArray[np.float64]:
-    """Compute the 2D Rosenblatt transform ``(u₁, C_{2|1}(u₂|u₁))``."""
-    u = np.asarray(u, dtype=float)
-    if u.ndim != 2 or u.shape[1] != 2:
-        raise ValueError("u must be (n,2)")
-    z1 = np.clip(u[:, 0], 1e-12, 1 - 1e-12)
-    z2 = np.clip(cond_cdf(u), 1e-12, 1 - 1e-12)
-    return np.asarray(np.column_stack([z1, z2]), dtype=np.float64)
+) -> FloatArray:
+    """Compute the Rosenblatt transform using a conditional CDF oracle."""
+
+    data = _validate_u(u)
+    cond_values = np.asarray(cond_cdf(data), dtype=float)
+    if cond_values.shape != data.shape:
+        raise ValueError("conditional CDF output must match input shape")
+    if not np.isfinite(cond_values).all():
+        raise ValueError("conditional CDF output must be finite")
+
+    transformed = np.empty_like(data)
+    transformed[:, 0] = np.clip(data[:, 0], _CLIP, 1.0 - _CLIP)
+    transformed[:, 1:] = np.clip(cond_values[:, 1:], _CLIP, 1.0 - _CLIP)
+    return np.asarray(transformed, dtype=np.float64)
 
 
-def gof_ks_uniform_2d(z: NDArray[np.float64]) -> float:
-    """Kolmogorov–Smirnov GoF p-value for Rosenblatt components."""
-    z = np.asarray(z, dtype=float)
-    if z.ndim != 2 or z.shape[1] != 2:
-        raise ValueError("z must be (n,2)")
-    p1 = kstest(z[:, 0], "uniform").pvalue
-    p2 = kstest(z[:, 1], "uniform").pvalue
-    return float(min(p1, p2))
+def gof_ks_uniform(z: NDArray[np.float64]) -> float:
+    """Return the minimum Kolmogorov–Smirnov p-value across dimensions."""
+
+    data = np.asarray(z, dtype=float)
+    if data.ndim != 2:
+        raise ValueError("z must be a 2D array")
+    if data.shape[1] < 1:
+        raise ValueError("z must have at least one dimension")
+
+    pvals = [
+        kstest(data[:, j], "uniform").pvalue for j in range(data.shape[1])
+    ]
+    return float(np.min(pvals))
 
 
 def rosenblatt_gaussian(
     u: NDArray[np.float64], rho: float
-) -> tuple[NDArray[np.float64], float]:
-    """Rosenblatt transform and GoF p-value for a Gaussian copula."""
-    z = rosenblatt_2d(u, lambda w: cond_cdf_gaussian(w, rho))
-    p = gof_ks_uniform_2d(z)
-    return z, p
+) -> tuple[FloatArray, float]:
+    """Compute Gaussian Rosenblatt transform and KS goodness-of-fit p-value."""
+
+    transformed = rosenblatt(u, lambda w: cond_cdf_gaussian(w, rho))
+    return transformed, gof_ks_uniform(transformed)
