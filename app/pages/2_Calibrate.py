@@ -114,6 +114,23 @@ def _fit_gaussian_tau(
         display,
     )
 
+    if not session_utils.has_U():
+        st.error("Pseudo-observations are required before calibration.")
+        st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
+        st.stop()
+
+def _run_student_ifm(U: FloatArray) -> FitResult:
+    rho_hat, nu_hat = student_t_ifm(U)
+    loglik = student_t_pseudo_loglik(U, rho_hat, nu_hat)
+    aic, bic = information_criteria(loglik, k_params=2, n=U.shape[0])
+    return FitResult(
+        family="Student t",
+        params={"rho": rho_hat, "nu": nu_hat},
+        method="IFM (Student t)",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
 
 def _fit_gaussian_ifm(
     U: FloatArray, labels: Tuple[str, ...] | None
