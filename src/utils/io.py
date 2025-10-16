@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import importlib
+import importlib.util
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,13 +45,13 @@ def read_csv_columns(
 
     dataset: Optional[NDArray[np.float64]] = None
 
-    try:
-        import pandas as pd
-    except ImportError:  # pragma: no cover - optional dependency
-        pass
-    else:
+
+    pandas_spec = importlib.util.find_spec("pandas")
+    if pandas_spec is not None:
+        pandas_module: Any = importlib.import_module("pandas")
         try:
-            frame = pd.read_csv(
+            frame = pandas_module.read_csv(
+
                 file_path,
                 usecols=list(columns),
                 encoding=encoding,
@@ -59,7 +61,7 @@ def read_csv_columns(
                 "No se pudieron leer las columnas solicitadas del CSV."
             ) from exc
 
-        numeric = frame.apply(pd.to_numeric, errors="coerce")
+        numeric = frame.apply(pandas_module.to_numeric, errors="coerce")
         dataset = np.asarray(numeric.to_numpy(dtype=np.float64))
 
     if dataset is None:

@@ -7,32 +7,24 @@ from numpy.typing import NDArray
 def empirical_pit(x: NDArray[np.float64]) -> NDArray[np.float64]:
     """Convert observations into empirical PIT pseudo-observations.
 
-    Args:
-        x:
-            Array with shape ``(n, 2)`` containing raw observations.
-
-    Returns:
-        ``NDArray[np.float64]`` with shape ``(n, 2)`` inside the open unit
-        square.
-
-    Raises:
-        ValueError: If ``x`` is not two-dimensional, does not have exactly
-            two columns, or contains NaNs.
+    The function supports datasets with an arbitrary number of columns.
+    It computes average ranks for ties and rescales them by ``n + 1`` so the
+    output lives in the open hypercube ``(0, 1)^d``.
     """
 
-    if x.ndim != 2 or x.shape[1] != 2:
-        raise ValueError("La matriz debe tener forma (n, 2).")
+    if x.ndim != 2:
+        raise ValueError("La matriz debe ser bidimensional.")
 
     if not np.isfinite(x).all():
         raise ValueError("Los datos contienen valores no finitos o NaN.")
 
-    n_obs = x.shape[0]
+    n_obs, n_dim = x.shape
     if n_obs == 0:
         raise ValueError("Se requieren observaciones para construir el PIT.")
 
     ranks = np.empty_like(x, dtype=np.float64)
 
-    for col in range(2):
+    for col in range(n_dim):
         values = x[:, col]
         order = np.argsort(values, kind="mergesort")
         sorted_vals = values[order]
@@ -42,11 +34,10 @@ def empirical_pit(x: NDArray[np.float64]) -> NDArray[np.float64]:
         )
 
         average_ranks = np.empty_like(unique_vals, dtype=np.float64)
-        for i, (start, count) in enumerate(zip(first_idx, counts)):
-            # Ranks are one-based indices.
+        for idx, (start, count) in enumerate(zip(first_idx, counts)):
             start_rank = float(start + 1)
             end_rank = float(start + count)
-            average_ranks[i] = (start_rank + end_rank) / 2.0
+            average_ranks[idx] = (start_rank + end_rank) / 2.0
 
         column_ranks = np.empty(n_obs, dtype=np.float64)
         for start, count, avg in zip(first_idx, counts, average_ranks):
@@ -55,4 +46,4 @@ def empirical_pit(x: NDArray[np.float64]) -> NDArray[np.float64]:
 
         ranks[:, col] = column_ranks
 
-    return ranks / float(n_obs + 1)
+    return np.asarray(ranks / float(n_obs + 1), dtype=np.float64)

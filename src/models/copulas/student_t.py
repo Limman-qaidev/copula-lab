@@ -6,7 +6,8 @@ from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import multivariate_t
+
+from scipy.stats import multivariate_t  # type: ignore[import-untyped]
 from scipy.stats import t as student_t
 
 logger = logging.getLogger(__name__)

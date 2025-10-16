@@ -4,7 +4,7 @@ from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import kstest, norm
+from scipy.stats import kstest, norm  # type: ignore[import-untyped]
 
 
 def cond_cdf_gaussian(
