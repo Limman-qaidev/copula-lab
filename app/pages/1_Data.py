@@ -44,6 +44,15 @@ def _show_altair_chart(chart: Any) -> None:
             pass
     altair_renderer(chart, use_container_width=True)
 
+def _load_preview(
+    raw: bytes,
+    columns: Iterable[str],
+    encoding: str,
+    header: List[str],
+) -> np.ndarray:
+    selected = list(columns)
+    if not selected:
+        raise ValueError("Select at least one column for the preview.")
 
 def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
     dataframe_renderer = getattr(st, "dataframe")
