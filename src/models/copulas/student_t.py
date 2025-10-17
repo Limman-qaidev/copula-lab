@@ -56,8 +56,8 @@ class StudentTCopula:
             raise ValueError("Provide corr or rho to parameterize the copula.")
         if corr is not None and rho is not None:
             raise ValueError("Specify only one of corr or rho.")
-        if nu <= 2.0:
-            raise ValueError("nu must be greater than 2")
+        if nu < 2.0:
+            raise ValueError("nu must be at least 2")
 
         if corr is not None:
             matrix = _validate_corr(corr)
