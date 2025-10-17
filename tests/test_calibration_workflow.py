@@ -53,6 +53,16 @@ def test_gaussian_ifm_recovers_corr() -> None:
     _assert_corr_close(outcome.result.params, corr_true, atol=0.03)
 
 
+def test_gaussian_loglik_recovers_corr() -> None:
+    corr_true = np.array(
+        [[1.0, 0.55, -0.25], [0.55, 1.0, 0.15], [-0.25, 0.15, 1.0]],
+        dtype=np.float64,
+    )
+    samples = GaussianCopula(corr=corr_true).rvs(18000, seed=29)
+    outcome = run_calibration("Gaussian", "Log-likelihood", samples)
+    _assert_corr_close(outcome.result.params, corr_true, atol=0.03)
+
+
 def test_student_tau_inversion_recovers_parameters() -> None:
     corr_true = np.array(
         [[1.0, 0.5, -0.2], [0.5, 1.0, 0.3], [-0.2, 0.3, 1.0]],
@@ -96,14 +106,14 @@ def test_student_low_nu_recovery() -> None:
     )
 
 
-def test_student_pmle_recovers_parameters() -> None:
+def test_student_loglik_recovers_parameters() -> None:
     corr_true = np.array(
         [[1.0, 0.45, 0.2], [0.45, 1.0, -0.3], [0.2, -0.3, 1.0]],
         dtype=np.float64,
     )
     nu_true = 7.0
     samples = StudentTCopula(corr=corr_true, nu=nu_true).rvs(3000, seed=23)
-    outcome = run_calibration("Student t", "PMLE", samples)
+    outcome = run_calibration("Student t", "Log-likelihood", samples)
     _assert_corr_close(outcome.result.params, corr_true, atol=0.07)
     assert outcome.result.params["nu"] == pytest.approx(nu_true, rel=0.05)
 

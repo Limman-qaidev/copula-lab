@@ -48,9 +48,13 @@ from src.utils.results import FitResult  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
 
 try:  # pragma: no cover - scipy optional in some deployments
-    from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
+    from scipy.optimize import (  # type: ignore[import-untyped]
+        minimize,
+        minimize_scalar,
+    )
     from scipy.stats import norm  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - handled by fallback implementation
+    minimize = None  # type: ignore[assignment]
     minimize_scalar = None  # type: ignore[assignment]
     norm = None
 
@@ -78,6 +82,23 @@ def _gaussian_ifm_corr_fallback(U: FloatArray) -> FloatArray:
     corr = np.asarray(corr, dtype=np.float64)
     np.fill_diagonal(corr, 1.0)
     return corr
+
+
+def _project_to_correlation(matrix: FloatArray) -> NDArray[np.float64]:
+    """Project a symmetric matrix onto the space of correlation matrices."""
+
+    array = np.asarray(matrix, dtype=np.float64)
+    if array.ndim != 2 or array.shape[0] != array.shape[1]:
+        raise ValueError("Input must be a square matrix.")
+
+    sym = 0.5 * (array + array.T)
+    eigvals, eigvecs = np.linalg.eigh(sym)
+    eigvals = np.clip(eigvals, 1e-8, None)
+    adjusted = (eigvecs * eigvals) @ eigvecs.T
+    diag = np.sqrt(np.clip(np.diag(adjusted), 1e-12, None))
+    corr = adjusted / np.outer(diag, diag)
+    np.fill_diagonal(corr, 1.0)
+    return np.asarray(corr, dtype=np.float64)
 
 
 ifm_callable: GaussianMatrixFunc | None = _gaussian_ifm_corr
@@ -108,9 +129,46 @@ def gaussian_ifm_corr(U: FloatArray) -> FloatArray:
     """Return the IFM correlation matrix with a graceful fallback."""
 
     if ifm_callable is not None:
-        corr = ifm_callable(U)
-        return np.asarray(corr, dtype=np.float64)
-    return _gaussian_ifm_corr_fallback(U)
+        corr = np.asarray(ifm_callable(U), dtype=np.float64)
+        return _project_to_correlation(corr)
+    return _project_to_correlation(_gaussian_ifm_corr_fallback(U))
+
+
+def _pack_corr_params(corr: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Pack a correlation matrix into unconstrained parameters."""
+
+    matrix = np.asarray(corr, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Correlation matrix must be square for packing.")
+    chol = np.linalg.cholesky(matrix)
+    diag_params = np.log(np.diag(chol))
+    off_params = chol[np.tril_indices(matrix.shape[0], k=-1)]
+    return np.concatenate([diag_params, off_params])
+
+
+def _corr_from_params(
+    theta: NDArray[np.float64], dim: int
+) -> NDArray[np.float64]:
+    """Reconstruct a correlation matrix from unconstrained parameters."""
+
+    expected_size = dim + dim * (dim - 1) // 2
+    if theta.size != expected_size:
+        raise ValueError(
+            "Parameter vector size does not match correlation dimension."
+        )
+    chol = np.zeros((dim, dim), dtype=np.float64)
+    chol[np.diag_indices(dim)] = np.exp(theta[:dim])
+    off_params = theta[dim:]
+    idx = 0
+    for i in range(1, dim):
+        for j in range(i):
+            chol[i, j] = off_params[idx]
+            idx += 1
+    cov = chol @ chol.T
+    diag = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+    corr = cov / np.outer(diag, diag)
+    np.fill_diagonal(corr, 1.0)
+    return _project_to_correlation(corr)
 
 
 def _flatten_corr(
@@ -217,6 +275,50 @@ def _calibrate_gaussian_ifm(
         family="Gaussian",
         params=params,
         method="IFM",
+        loglik=loglik,
+        aic=aic,
+        bic=bic,
+    )
+    return CalibrationOutcome(result=fit, display=display)
+
+
+def _calibrate_gaussian_loglik(
+    U: FloatArray, labels: Tuple[str, ...] | None
+) -> CalibrationOutcome:
+    corr0 = gaussian_ifm_corr(U)
+    dim = U.shape[1]
+    x0 = _pack_corr_params(corr0)
+
+    if minimize is None:
+        corr_hat = corr0
+    else:
+        def objective(theta: NDArray[np.float64]) -> float:
+            try:
+                corr_candidate = _corr_from_params(theta, dim)
+                loglik_candidate = gaussian_pseudo_loglik(U, corr_candidate)
+            except ValueError:
+                return float("inf")
+            return -loglik_candidate
+
+        result = minimize(
+            objective,
+            x0=x0,
+            method="L-BFGS-B",
+            options={"maxiter": 500},
+        )
+        if result.success:
+            corr_hat = _corr_from_params(result.x, dim)
+        else:
+            corr_hat = corr0
+
+    loglik = gaussian_pseudo_loglik(U, corr_hat)
+    k_params = dim * (dim - 1) // 2
+    aic, bic = information_criteria(loglik, k_params=k_params, n=U.shape[0])
+    params, display = _flatten_corr(corr_hat, labels)
+    fit = FitResult(
+        family="Gaussian",
+        params=params,
+        method="Log-likelihood",
         loglik=loglik,
         aic=aic,
         bic=bic,
@@ -413,9 +515,10 @@ def _calibrate_amh(
 _CALIBRATION_SPECS: Tuple[CalibrationSpec, ...] = (
     CalibrationSpec("Gaussian", "Tau inversion", _calibrate_gaussian_tau),
     CalibrationSpec("Gaussian", "IFM", _calibrate_gaussian_ifm),
+    CalibrationSpec("Gaussian", "Log-likelihood", _calibrate_gaussian_loglik),
     CalibrationSpec("Student t", "Tau inversion", _calibrate_student_tau),
     CalibrationSpec("Student t", "IFM", _calibrate_student_ifm),
-    CalibrationSpec("Student t", "PMLE", _calibrate_student_pmle),
+    CalibrationSpec("Student t", "Log-likelihood", _calibrate_student_pmle),
     CalibrationSpec("Clayton", "Tau inversion", _calibrate_clayton),
     CalibrationSpec("Gumbel", "Tau inversion", _calibrate_gumbel),
     CalibrationSpec("Frank", "Tau inversion", _calibrate_frank),

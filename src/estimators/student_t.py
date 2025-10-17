@@ -216,7 +216,7 @@ def _initial_guesses(
 
 
 def student_t_pmle(u: FloatArray) -> Tuple[NDArray[np.float64], float, float]:
-    """Return PMLE estimates (correlation, nu, loglik) for Student t copula."""
+    """Return log-likelihood (PMLE) estimates for the Student t copula."""
 
     data = _validate_u(u)
     dim = data.shape[1]
