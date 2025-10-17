@@ -15,38 +15,26 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from src.estimators.student_t import student_t_pmle  # noqa: E402
 from src.utils import session as session_utils  # noqa: E402
-from src.utils.dependence import kendall_tau_matrix  # noqa: E402
-from src.utils.modelsel import (  # noqa: E402
-    gaussian_pseudo_loglik,
-    information_criteria,
-)
 from src.utils.results import FitResult  # noqa: E402
 from src.utils.rosenblatt import (  # noqa: E402
+    rosenblatt_amh,
+    rosenblatt_clayton,
+    rosenblatt_frank,
     rosenblatt_gaussian,
+    rosenblatt_gumbel,
+    rosenblatt_joe,
     rosenblatt_student_t,
 )
 from src.utils.transforms import empirical_pit  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
-
-try:  # pragma: no cover - import path differs in some deployments
-    from src.estimators.tau_inversion import (
-        rho_matrix_from_tau_gaussian,
-    )
-except ImportError:  # pragma: no cover - fallback exercised in app runtime
-
-    def rho_matrix_from_tau_gaussian(tau_matrix: FloatArray) -> FloatArray:
-        tau_arr = np.asarray(tau_matrix, dtype=np.float64)
-        if tau_arr.ndim != 2 or tau_arr.shape[0] != tau_arr.shape[1]:
-            raise ValueError("tau_matrix must be square")
-        if tau_arr.shape[0] < 2:
-            raise ValueError("tau_matrix must describe at least two variables")
-
-        corr = np.sin(0.5 * np.pi * tau_arr)
-        np.fill_diagonal(corr, 1.0)
-        return corr
-
+from src.workflows.calibration import (  # noqa: E402
+    CalibrationOutcome,
+    get_specs_for_dimension,
+    list_family_names,
+    reconstruct_corr,
+    run_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +71,7 @@ class StudyArtifacts:
     data: FloatArray
     columns: List[str]
     U: FloatArray
+    calibrations: Dict[Tuple[str, str], CalibrationOutcome]
     gaussian: FitDiagnostics
     student_t: FitDiagnostics
     figures: Dict[str, Path]
@@ -90,6 +79,77 @@ class StudyArtifacts:
 
 FIGURE_DIR = ROOT_DIR / "docs" / "assets" / "figures" / "06_practice_notes"
 FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _format_metric(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "—"
+
+
+def _evaluate_uniformity(
+    result: FitResult, U: FloatArray
+) -> Tuple[float | None, float | None]:
+    dim = U.shape[1]
+    try:
+        if result.family == "Gaussian":
+            corr = reconstruct_corr(result.params, dim)
+            if corr is None:
+                return (None, None)
+            _, ks_val, cvm_val = rosenblatt_gaussian(U, float(corr[0, 1]))
+            return float(ks_val), float(cvm_val)
+        if result.family == "Student t":
+            corr = reconstruct_corr(result.params, dim)
+            nu_value = result.params.get("nu")
+            if corr is None or nu_value is None:
+                return (None, None)
+            _, ks_val, cvm_val = rosenblatt_student_t(
+                U, float(corr[0, 1]), float(nu_value)
+            )
+            return float(ks_val), float(cvm_val)
+        theta_value = result.params.get("theta")
+        if theta_value is None:
+            return (None, None)
+        theta = float(theta_value)
+        if result.family == "Clayton":
+            _, ks_val, cvm_val = rosenblatt_clayton(U, theta)
+            return float(ks_val), float(cvm_val)
+        if result.family == "Gumbel":
+            _, ks_val, cvm_val = rosenblatt_gumbel(U, theta)
+            return float(ks_val), float(cvm_val)
+        if result.family == "Frank":
+            _, ks_val, cvm_val = rosenblatt_frank(U, theta)
+            return float(ks_val), float(cvm_val)
+        if result.family == "Joe":
+            _, ks_val, cvm_val = rosenblatt_joe(U, theta)
+            return float(ks_val), float(cvm_val)
+        if result.family == "AMH":
+            _, ks_val, cvm_val = rosenblatt_amh(U, theta)
+            return float(ks_val), float(cvm_val)
+    except ValueError as exc:
+        logger.warning(
+            "Uniformity computation failed for %s (%s): %s",
+            result.family,
+            result.method,
+            exc,
+        )
+    return (None, None)
+
+
+def _select_best_outcome(
+    calibrations: Dict[Tuple[str, str], CalibrationOutcome], family: str
+) -> CalibrationOutcome:
+    best: CalibrationOutcome | None = None
+    best_score = float("inf")
+    for (fam, _), outcome in calibrations.items():
+        if fam != family:
+            continue
+        bic_value = outcome.result.bic
+        score = float("inf") if bic_value is None else float(bic_value)
+        if best is None or score < best_score:
+            best = outcome
+            best_score = score
+    if best is None:
+        raise ValueError(f"No calibration available for family {family}")
+    return best
 
 
 def _load_example_dataset(
@@ -210,56 +270,54 @@ def _run_pipeline() -> StudyArtifacts:
         "Constructed pseudo-observations for study pipeline: shape=%s", U.shape
     )
 
-    tau_matrix = kendall_tau_matrix(U)
-    corr_gauss = rho_matrix_from_tau_gaussian(tau_matrix)
-    loglik_gauss = gaussian_pseudo_loglik(U, corr_gauss)
-    k_gauss = U.shape[1] * (U.shape[1] - 1) // 2
-    aic_gauss, bic_gauss = information_criteria(
-        loglik_gauss, k_params=k_gauss, n=U.shape[0]
+    labels = tuple(columns)
+    calibrations: Dict[Tuple[str, str], CalibrationOutcome] = {}
+    specs = get_specs_for_dimension(U.shape[1])
+    for spec in specs:
+        try:
+            outcome = run_spec(spec, U, labels)
+        except ValueError as exc:
+            logger.warning(
+                "Skipping %s (%s) during study calibration: %s",
+                spec.family,
+                spec.method,
+                exc,
+            )
+            continue
+        calibrations[(spec.family, spec.method)] = outcome
+
+    logger.info(
+        "Study calibrations: %s",
+        ", ".join(
+            f"{family} ({method})" for family, method in calibrations.keys()
+        ),
     )
-    params_gauss = {
-        f"rho_{i + 1}_{j + 1}": float(corr_gauss[i, j])
-        for i in range(U.shape[1])
-        for j in range(i + 1, U.shape[1])
-    }
-    gaussian_fit = FitResult(
-        family="Gaussian",
-        params=params_gauss,
-        method="Tau inversion",
-        loglik=loglik_gauss,
-        aic=aic_gauss,
-        bic=bic_gauss,
-    )
-    Z_gauss, ks_gauss, cvm_gauss = rosenblatt_gaussian(
-        U, float(corr_gauss[0, 1])
-    )
+
+    gaussian_outcome = _select_best_outcome(calibrations, "Gaussian")
+    student_outcome = _select_best_outcome(calibrations, "Student t")
+
+    dim = U.shape[1]
+    corr_gauss = reconstruct_corr(gaussian_outcome.result.params, dim)
+    if corr_gauss is None:
+        raise ValueError("Gaussian calibration lacks correlation parameters.")
+    rho_gauss = float(corr_gauss[0, 1])
+    Z_gauss, ks_gauss, cvm_gauss = rosenblatt_gaussian(U, rho_gauss)
     gaussian_diag = FitDiagnostics(
-        fit=gaussian_fit,
+        fit=gaussian_outcome.result,
         rosenblatt=Z_gauss,
         ks_pvalue=ks_gauss,
         cvm_pvalue=cvm_gauss,
     )
 
-    corr_t, nu_t, loglik_t = student_t_pmle(U)
-    k_t = U.shape[1] * (U.shape[1] - 1) // 2 + 1
-    aic_t, bic_t = information_criteria(loglik_t, k_params=k_t, n=U.shape[0])
-    params_t = {
-        f"rho_{i + 1}_{j + 1}": float(corr_t[i, j])
-        for i in range(U.shape[1])
-        for j in range(i + 1, U.shape[1])
-    }
-    params_t["nu"] = float(nu_t)
-    student_fit = FitResult(
-        family="Student t",
-        params=params_t,
-        method="PMLE (Student t)",
-        loglik=loglik_t,
-        aic=aic_t,
-        bic=bic_t,
-    )
-    Z_t, ks_t, cvm_t = rosenblatt_student_t(U, float(corr_t[0, 1]), nu_t)
+    corr_t = reconstruct_corr(student_outcome.result.params, dim)
+    nu_value = student_outcome.result.params.get("nu")
+    if corr_t is None or nu_value is None:
+        raise ValueError("Student t calibration requires correlation and nu.")
+    rho_t = float(corr_t[0, 1])
+    nu_t = float(nu_value)
+    Z_t, ks_t, cvm_t = rosenblatt_student_t(U, rho_t, nu_t)
     student_diag = FitDiagnostics(
-        fit=student_fit,
+        fit=student_outcome.result,
         rosenblatt=Z_t,
         ks_pvalue=ks_t,
         cvm_pvalue=cvm_t,
@@ -270,6 +328,7 @@ def _run_pipeline() -> StudyArtifacts:
         data=data,
         columns=columns,
         U=U,
+        calibrations=calibrations,
         gaussian=gaussian_diag,
         student_t=student_diag,
         figures=figures,
@@ -291,6 +350,39 @@ presentations.
 if st.button("Run end-to-end study", type="primary"):
     artifacts = _run_pipeline()
     st.success("Study pipeline completed successfully.", icon="✅")
+
+    family_order = list_family_names()
+    ordered_items = sorted(
+        artifacts.calibrations.items(),
+        key=lambda item: (
+            family_order.index(item[0][0])
+            if item[0][0] in family_order
+            else len(family_order),
+            item[0][1],
+        ),
+    )
+    catalog_rows: List[Dict[str, str]] = []
+    for (family, method), outcome in ordered_items:
+        ks_val, cvm_val = _evaluate_uniformity(outcome.result, artifacts.U)
+        if outcome.display:
+            params_display = ", ".join(outcome.display)
+        else:
+            params_display = ", ".join(
+                f"{key}={value:.4f}"
+                for key, value in outcome.result.params.items()
+            )
+        catalog_rows.append(
+            {
+                "Family": family,
+                "Method": method,
+                "LogLik": _format_metric(outcome.result.loglik),
+                "AIC": _format_metric(outcome.result.aic),
+                "BIC": _format_metric(outcome.result.bic),
+                "KS": _format_metric(ks_val),
+                "CvM": _format_metric(cvm_val),
+                "Parameters": params_display,
+            }
+        )
 
     summary_cols = st.columns(2)
     for column, diagnostics in zip(
@@ -333,7 +425,9 @@ if st.button("Run end-to-end study", type="primary"):
         )
 
     with diag_tab:
-        gauss_tab, student_tab = st.tabs(["Gaussian", "Student t"])
+        gauss_tab, student_tab, catalog_tab = st.tabs(
+            ["Gaussian", "Student t", "All copulas"]
+        )
         with gauss_tab:
             _show_image(
                 str(artifacts.figures["rosenblatt_gaussian"]),
@@ -350,6 +444,15 @@ if st.button("Run end-to-end study", type="primary"):
                     "and CvM p-values."
                 ),
             )
+        with catalog_tab:
+            if catalog_rows:
+                st.caption(
+                    "Uniformity metrics and parameter summaries for all "
+                    "calibrated copulas."
+                )
+                st.table(catalog_rows)
+            else:
+                st.info("No copula calibrations were generated in this run.")
 else:
     st.info(
         "Press the button to generate data, calibrate both copulas, and "
