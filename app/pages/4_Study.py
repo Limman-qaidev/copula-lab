@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -50,6 +51,25 @@ except ImportError:  # pragma: no cover - fallback exercised in app runtime
 logger = logging.getLogger(__name__)
 
 
+def _supports_width_kwarg(renderer: Any) -> bool:
+    try:
+        signature = inspect.signature(renderer)
+    except (TypeError, ValueError):
+        return False
+    return "width" in signature.parameters
+
+
+def _show_image(path: str, caption: str) -> None:
+    image_renderer = getattr(st, "image")
+    if _supports_width_kwarg(image_renderer):
+        try:
+            image_renderer(path, caption=caption, width=640)
+            return
+        except TypeError:
+            pass
+    image_renderer(path, caption=caption, use_column_width=True)
+
+
 @dataclass(frozen=True)
 class FitDiagnostics:
     fit: FitResult
@@ -92,7 +112,7 @@ def _save_figures(
 ) -> Dict[str, Path]:
     figure_map: Dict[str, Path] = {}
 
-    fig1, ax1 = plt.subplots()
+    fig1, ax1 = plt.subplots(figsize=(4.0, 4.0))
     ax1.scatter(
         data[:, 0], data[:, 1], alpha=0.75, color="#2563eb", edgecolor="white"
     )
@@ -100,11 +120,12 @@ def _save_figures(
     ax1.set_xlabel(columns[0])
     ax1.set_ylabel(columns[1])
     path1 = FIGURE_DIR / "practice_pipeline_raw.png"
+    fig1.tight_layout()
     fig1.savefig(path1, bbox_inches="tight", dpi=220)
     plt.close(fig1)
     figure_map["raw"] = path1
 
-    fig2, ax2 = plt.subplots()
+    fig2, ax2 = plt.subplots(figsize=(4.0, 4.0))
     ax2.scatter(
         U[:, 0], U[:, 1], alpha=0.75, color="#16a34a", edgecolor="white"
     )
@@ -112,12 +133,13 @@ def _save_figures(
     ax2.set_xlabel("U1")
     ax2.set_ylabel("U2")
     path2 = FIGURE_DIR / "practice_pipeline_pit.png"
+    fig2.tight_layout()
     fig2.savefig(path2, bbox_inches="tight", dpi=220)
     plt.close(fig2)
     figure_map["pit"] = path2
 
     bins = np.linspace(0.0, 1.0, 21)
-    fig3, axes = plt.subplots(1, 2, figsize=(8, 3))
+    fig3, axes = plt.subplots(1, 2, figsize=(6.5, 3.0))
     axes[0].hist(
         gaussian.rosenblatt[:, 0],
         bins=bins,
@@ -146,7 +168,7 @@ def _save_figures(
     plt.close(fig3)
     figure_map["rosenblatt_gaussian"] = path3
 
-    fig4, axes = plt.subplots(1, 2, figsize=(8, 3))
+    fig4, axes = plt.subplots(1, 2, figsize=(6.5, 3.0))
     axes[0].hist(
         student_t_diag.rosenblatt[:, 0],
         bins=bins,
@@ -290,20 +312,18 @@ if st.button("Run end-to-end study", type="primary"):
     )
 
     with data_tab:
-        st.image(
+        _show_image(
             str(artifacts.figures["raw"]),
             caption="Figure 1. Sample credit spread vs. loss cloud.",
-            use_column_width=True,
         )
         st.caption(
             "The synthetic dataset contains 400 observations " "with ρ=0.65."
         )
 
     with pit_tab:
-        st.image(
+        _show_image(
             str(artifacts.figures["pit"]),
             caption="Figure 2. Empirical PIT pseudo-observations.",
-            use_column_width=True,
         )
         preview = artifacts.U[:10, :]
         st.dataframe(
@@ -315,22 +335,20 @@ if st.button("Run end-to-end study", type="primary"):
     with diag_tab:
         gauss_tab, student_tab = st.tabs(["Gaussian", "Student t"])
         with gauss_tab:
-            st.image(
+            _show_image(
                 str(artifacts.figures["rosenblatt_gaussian"]),
                 caption=(
                     "Figure 3. Gaussian Rosenblatt histograms with KS "
                     "and CvM p-values."
                 ),
-                use_column_width=True,
             )
         with student_tab:
-            st.image(
+            _show_image(
                 str(artifacts.figures["rosenblatt_student_t"]),
                 caption=(
                     "Figure 4. Student t Rosenblatt histograms with KS "
                     "and CvM p-values."
                 ),
-                use_column_width=True,
             )
 else:
     st.info(

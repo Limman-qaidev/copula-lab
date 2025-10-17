@@ -44,15 +44,6 @@ def _show_altair_chart(chart: Any) -> None:
             pass
     altair_renderer(chart, use_container_width=True)
 
-def _load_preview(
-    raw: bytes,
-    columns: Iterable[str],
-    encoding: str,
-    header: List[str],
-) -> np.ndarray:
-    selected = list(columns)
-    if not selected:
-        raise ValueError("Select at least one column for the preview.")
 
 def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
     dataframe_renderer = getattr(st, "dataframe")
@@ -64,6 +55,15 @@ def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
             pass
     dataframe_renderer(data, use_container_width=True, hide_index=hide_index)
 
+def _load_preview(
+    raw: bytes,
+    columns: Iterable[str],
+    encoding: str,
+    header: List[str],
+) -> np.ndarray:
+    selected = list(columns)
+    if not selected:
+        raise ValueError("Select at least one column for the preview.")
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
@@ -201,13 +201,100 @@ def _render_histograms(data: np.ndarray, columns: List[str]) -> None:
         if finite.size == 0:
             st.warning(f"Column '{column}' has no finite values in preview.")
             continue
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(4.0, 3.0))
         ax.hist(finite, bins=20, color="#2563eb", edgecolor="white")
         ax.set_title(f"Distribution of {column}")
         ax.set_xlabel(column)
         ax.set_ylabel("Frequency")
+        fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
+
+
+def _render_u_density_matrix(data: np.ndarray, labels: List[str]) -> None:
+    if data.ndim != 2:
+        st.error("Pseudo-observations must be 2D to plot densities.")
+        return
+
+    dims = data.shape[1]
+    if dims < 2:
+        st.info("At least two dimensions are required for density plots.")
+        return
+
+    max_dims = min(dims, 5)
+    if dims > max_dims:
+        st.caption(
+            "Showing the first "
+            f"{max_dims} dimensions out of {dims} "
+            "to keep the layout readable."
+        )
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        st.warning("Matplotlib is required to render the density matrix.")
+        return
+
+    subset = data[:, :max_dims]
+    label_subset = labels[:max_dims]
+    fig, axes = plt.subplots(
+        max_dims,
+        max_dims,
+        figsize=(3.2 * max_dims, 3.2 * max_dims),
+        squeeze=False,
+    )
+
+    cmap = plt.get_cmap("viridis")
+    for i in range(max_dims):
+        for j in range(max_dims):
+            ax = axes[i, j]
+            if i == j:
+                values = subset[:, i]
+                hist, edges = np.histogram(
+                    values, bins=30, range=(0.0, 1.0), density=True
+                )
+                centers = 0.5 * (edges[:-1] + edges[1:])
+                ax.fill_between(centers, hist, color="#93c5fd", alpha=0.7)
+                ax.plot(centers, hist, color="#2563eb", linewidth=1.4)
+                ax.set_xlim(0.0, 1.0)
+                ymax = float(hist.max()) if hist.size else 0.0
+                ax.set_ylim(0.0, max(ymax * 1.05, 0.5))
+            else:
+                x = subset[:, j]
+                y = subset[:, i]
+                grid, x_edges, y_edges = np.histogram2d(
+                    x,
+                    y,
+                    bins=32,
+                    range=[[0.0, 1.0], [0.0, 1.0]],
+                    density=True,
+                )
+                ax.imshow(
+                    grid.T,
+                    extent=[0.0, 1.0, 0.0, 1.0],
+                    origin="lower",
+                    cmap=cmap,
+                    aspect="equal",
+                )
+                ax.set_xlim(0.0, 1.0)
+                ax.set_ylim(0.0, 1.0)
+            if i == max_dims - 1:
+                ax.set_xlabel(label_subset[j])
+            else:
+                ax.set_xticklabels([])
+            if j == 0:
+                ax.set_ylabel(label_subset[i])
+            else:
+                ax.set_yticklabels([])
+            ax.grid(False)
+            try:
+                ax.set_box_aspect(1.0)
+            except AttributeError:  # pragma: no cover - older Matplotlib
+                pass
+
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
 
 
 st.title("Data")
@@ -319,9 +406,7 @@ st.success(
     f"n={U.shape[0]}, d={U.shape[1]}"
 )
 
-summary_tab, scatter_tab, u_hist_tab = st.tabs(
-    ["Summary", "Scatter (first two dims)", "U histograms"]
-)
+summary_tab, density_tab = st.tabs(["Summary", "Density matrix"])
 
 with summary_tab:
     preview_rows = min(10, U.shape[0])
@@ -339,42 +424,8 @@ with summary_tab:
         }
         _show_dataframe(data=preview_dict)
 
-with scatter_tab:
-    if U.shape[1] < 2:
-        st.info("U is univariate; the scatter plot is skipped.")
-    else:
-        pandas_spec = importlib.util.find_spec("pandas")
-        altair_spec = importlib.util.find_spec("altair")
-        if pandas_spec is not None and altair_spec is not None:
-            pandas_module = importlib.import_module("pandas")
-            altair_module = importlib.import_module("altair")
-            scatter_frame = pandas_module.DataFrame(
-                {
-                    "U1": U[:, 0],
-                    "U2": U[:, 1],
-                    "index": np.arange(U.shape[0]),
-                }
-            )
-            chart = (
-                altair_module.Chart(scatter_frame)
-                .mark_circle(opacity=0.7, size=60, color="#2563eb")
-                .encode(
-                    x="U1",
-                    y="U2",
-                    tooltip=["index", "U1", "U2"],
-                )
-                .properties(height=400)
-            )
-            chart = chart.properties(width="container")
-            _show_altair_chart(chart)
-        else:
-            chart_data = {
-                f"U{i + 1}": U[:, i] for i in range(min(2, U.shape[1]))
-            }
-            st.scatter_chart(chart_data)
-
-with u_hist_tab:
-    _render_histograms(U, [f"U{i + 1}" for i in range(U.shape[1])])
+with density_tab:
+    _render_u_density_matrix(U, column_labels)
 
 st.info(
     "Continue with the **Calibrate** tab to fit models using "
