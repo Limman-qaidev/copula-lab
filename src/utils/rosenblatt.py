@@ -76,8 +76,8 @@ def cond_cdf_student_t(
     data = _validate_u(u)
     if not (-0.999999 < rho < 0.999999):
         raise ValueError("rho must lie inside (-1, 1)")
-    if nu <= 2.0:
-        raise ValueError("nu must be greater than 2")
+    if nu < 2.0:
+        raise ValueError("nu must be at least 2")
 
     _, d = data.shape
     if d >= 2 and rho <= -1.0 / (d - 1):

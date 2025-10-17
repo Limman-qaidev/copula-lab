@@ -75,8 +75,8 @@ def student_t_pseudo_loglik(
     """Compute the Student t copula pseudo log-likelihood."""
 
     data = _validate_u(u)
-    if nu <= 2.0:
-        raise ValueError("nu must be greater than 2")
+    if nu < 2.0:
+        raise ValueError("nu must be at least 2")
     corr_matrix = _validate_corr(corr)
     if data.shape[1] != corr_matrix.shape[0]:
         raise ValueError(
