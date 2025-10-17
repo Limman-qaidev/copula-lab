@@ -5,8 +5,9 @@ import inspect
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Protocol
 
+import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
@@ -14,11 +15,39 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+try:  # pragma: no cover - optional dependency for type hints
+    from copulas.base import BaseCopula  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - fallback for local models
+
+    class BaseCopula(Protocol):
+        """Protocol describing the minimal copula interface for diagnostics."""
+
+        def pdf(self, U: np.ndarray) -> np.ndarray:
+            """Evaluate the copula density on points inside (0, 1)^d."""
+
+        def rvs(self, n: int, seed: int | None = None) -> np.ndarray:
+            """Draw random variates from the copula."""
+
+from src.models.copulas.archimedean import (  # noqa: E402
+    AMHCopula,
+    ClaytonCopula,
+    FrankCopula,
+    GumbelCopula,
+    JoeCopula,
+)
+from src.models.copulas.gaussian import GaussianCopula  # noqa: E402
+from src.models.copulas.student_t import StudentTCopula  # noqa: E402
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
     information_criteria,
     student_t_pseudo_loglik,
+)
+from src.utils.results import FitResult  # noqa: E402
+from src.workflows.calibration import (  # noqa: E402
+    get_specs_for_dimension,
+    reconstruct_corr,
+    run_spec,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +84,9 @@ if dataset_entry is not None:
         )
 
 
+labels = st.session_state.get("U_columns")
+label_tuple = tuple(labels) if isinstance(labels, (list, tuple)) else None
+
 fit_results = list(session_utils.get_fit_results())
 if not fit_results:
     st.info("Run at least one calibration before comparing models.")
@@ -66,6 +98,53 @@ if not fit_results:
     st.stop()
 
 st.write(f"Models available for comparison: {len(fit_results)}")
+
+specs_for_dim = get_specs_for_dimension(dim)
+existing_pairs = {
+    (result.family, result.method) for result in fit_results
+}
+missing_specs = [
+    spec
+    for spec in specs_for_dim
+    if (spec.family, spec.method) not in existing_pairs
+]
+if missing_specs:
+    missing_labels = ", ".join(
+        f"{spec.family} ({spec.method})" for spec in missing_specs
+    )
+    st.info(
+        "Additional copula calibrations are available: {labels}.".format(
+            labels=missing_labels,
+        )
+    )
+    if st.button("Calibrate missing copulas", type="secondary"):
+        new_results: list[FitResult] = []
+        for spec in missing_specs:
+            try:
+                outcome = run_spec(spec, U, label_tuple)
+            except ValueError as exc:
+                st.warning(
+                    "Failed to calibrate {family} ({method}): {msg}".format(
+                        family=spec.family,
+                        method=spec.method,
+                        msg=exc,
+                    )
+                )
+                continue
+            session_utils.append_fit_result(outcome.result)
+            fit_results.append(outcome.result)
+            new_results.append(outcome.result)
+            logger.info(
+                "Auto-calibrated %s via %s for comparison diagnostics.",
+                outcome.result.family,
+                outcome.result.method,
+            )
+        if new_results:
+            st.success(
+                "Added {count} copulas to the comparison set.".format(
+                    count=len(new_results)
+                )
+            )
 
 
 def _supports_width_kwarg(renderer: Any) -> bool:
@@ -121,25 +200,176 @@ def _format_metrics(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "—"
 
 
-def _rebuild_corr(params: Mapping[str, float], dim: int) -> np.ndarray | None:
-    matrix = np.eye(dim, dtype=np.float64)
-    found = False
-    for key, value in params.items():
-        if not key.startswith("rho_"):
-            continue
-        parts = key.split("_")
-        if len(parts) != 3:
-            continue
-        try:
-            i = int(parts[1]) - 1
-            j = int(parts[2]) - 1
-        except ValueError:
-            continue
-        if not (0 <= i < dim and 0 <= j < dim):
-            continue
-        matrix[i, j] = matrix[j, i] = float(value)
-        found = True
-    return matrix if found else None
+def _build_copula_model(result: FitResult, dim: int) -> BaseCopula | None:
+    """Instantiate a copula model from stored calibration parameters."""
+
+    if result.family == "Gaussian":
+        corr = reconstruct_corr(result.params, dim)
+        if corr is None:
+            return None
+        return GaussianCopula(corr=corr)
+
+    if result.family == "Student t":
+        corr = reconstruct_corr(result.params, dim)
+        nu_value = result.params.get("nu")
+        if corr is None or nu_value is None:
+            return None
+        return StudentTCopula(corr=corr, nu=float(nu_value))
+
+    theta_value = result.params.get("theta")
+    if theta_value is None:
+        return None
+
+    theta = float(theta_value)
+    if result.family == "Clayton":
+        return ClaytonCopula(theta=theta, dim=dim)
+    if result.family == "Gumbel":
+        return GumbelCopula(theta=theta, dim=dim)
+    if result.family == "Frank":
+        return FrankCopula(theta=theta, dim=dim)
+    if result.family == "Joe":
+        return JoeCopula(theta=theta, dim=dim)
+    if result.family == "AMH":
+        if dim != 2:
+            logger.warning(
+                "AMH copula visualization requires two dimensions; "
+                "received %d.",
+                dim,
+            )
+            return None
+        return AMHCopula(theta=theta)
+
+    logger.warning(
+        "Unsupported copula family for visualization: %s",
+        result.family,
+    )
+    return None
+
+
+def plot_density_qq(
+    U_emp: np.ndarray,
+    copula_model: BaseCopula,
+    title: str,
+    *,
+    n_simulate: int = 5000,
+    seed: int = 1729,
+) -> None:
+    """
+    Render theoretical and empirical QQ diagnostics for copula densities.
+
+    Assumptions
+    ----------
+    - ``U_emp`` contains pseudo-observations strictly inside ``(0, 1)``.
+    - ``copula_model`` exposes ``pdf`` and ``rvs`` for the same dimension.
+
+    Limitations
+    -----------
+    - Monte Carlo noise may dominate for small samples or flat densities.
+    - Diagnostics rely on log densities; tails may require closer inspection.
+    """
+
+    data = np.asarray(U_emp, dtype=np.float64)
+    if data.ndim != 2:
+        raise ValueError(
+            "U_emp must be a 2D array of pseudo-observations."
+        )
+    if np.any((data <= 0.0) | (data >= 1.0)):
+        raise ValueError("Pseudo-observations must lie inside (0, 1).")
+
+    dim = data.shape[1]
+    if getattr(copula_model, "dim", dim) != dim:
+        raise ValueError(
+            "Copula dimension does not match the pseudo-observations."
+        )
+
+    n_model = min(max(n_simulate, dim * 500), 20000)
+    simulated = copula_model.rvs(n_model, seed=seed)
+    reference_simulated = copula_model.rvs(n_model, seed=seed + 1)
+
+    sim_array = np.asarray(simulated, dtype=np.float64)
+    ref_array = np.asarray(reference_simulated, dtype=np.float64)
+    if any(
+        (
+            sim_array.ndim != 2,
+            sim_array.shape[1] != dim,
+            ref_array.ndim != 2,
+            ref_array.shape[1] != dim,
+        )
+    ):
+        raise ValueError("Simulated samples have incompatible shapes.")
+
+    empirical_pdf = np.asarray(copula_model.pdf(data), dtype=np.float64)
+    model_pdf = np.asarray(copula_model.pdf(sim_array), dtype=np.float64)
+    reference_pdf = np.asarray(copula_model.pdf(ref_array), dtype=np.float64)
+
+    empirical_pdf = np.log(np.clip(empirical_pdf, 1e-12, None))
+    model_pdf = np.log(np.clip(model_pdf, 1e-12, None))
+    reference_pdf = np.log(np.clip(reference_pdf, 1e-12, None))
+
+    empirical_pdf = np.sort(empirical_pdf[np.isfinite(empirical_pdf)])
+    model_pdf = np.sort(model_pdf[np.isfinite(model_pdf)])
+    reference_pdf = np.sort(reference_pdf[np.isfinite(reference_pdf)])
+    if any(
+        (
+            empirical_pdf.size == 0,
+            model_pdf.size == 0,
+            reference_pdf.size == 0,
+        )
+    ):
+        raise ValueError("Density evaluation produced no finite values.")
+
+    theoretical_size = min(model_pdf.size, reference_pdf.size)
+    empirical_size = min(model_pdf.size, empirical_pdf.size)
+
+    model_for_theoretical = model_pdf[:theoretical_size]
+    reference_for_theoretical = reference_pdf[:theoretical_size]
+    model_for_empirical = model_pdf[:empirical_size]
+    empirical_for_empirical = empirical_pdf[:empirical_size]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0))
+
+    axes[0].scatter(
+        model_for_theoretical,
+        reference_for_theoretical,
+        s=12,
+        alpha=0.7,
+    )
+    reference_line = np.linspace(
+        min(
+            model_for_theoretical[0],
+            reference_for_theoretical[0],
+        ),
+        max(
+            model_for_theoretical[-1],
+            reference_for_theoretical[-1],
+        ),
+        100,
+    )
+    axes[0].plot(reference_line, reference_line, linestyle="--")
+    axes[0].set_xlabel("Model log density quantiles")
+    axes[0].set_ylabel("Reference log density quantiles")
+    axes[0].set_title("Theoretical QQ of log density")
+
+    reference_line = np.linspace(
+        min(model_for_empirical[0], empirical_for_empirical[0]),
+        max(model_for_empirical[-1], empirical_for_empirical[-1]),
+        100,
+    )
+    axes[1].scatter(
+        model_for_empirical,
+        empirical_for_empirical,
+        s=12,
+        alpha=0.7,
+    )
+    axes[1].plot(reference_line, reference_line, linestyle="--")
+    axes[1].set_xlabel("Model log density quantiles")
+    axes[1].set_ylabel("Empirical log density quantiles")
+    axes[1].set_title("Empirical QQ of log density")
+
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
 
 rows: list[dict[str, Any]] = []
@@ -148,7 +378,7 @@ for idx, result in enumerate(fit_results):
     aic = result.aic
     bic = result.bic
     if result.family == "Gaussian":
-        corr = _rebuild_corr(result.params, dim)
+        corr = reconstruct_corr(result.params, dim)
         if corr is None:
             st.warning(
                 "Gaussian model is missing correlation entries and cannot be "
@@ -168,12 +398,12 @@ for idx, result in enumerate(fit_results):
                 session_utils.update_fit_result(idx, updated)
                 fit_results[idx] = updated
     elif result.family == "Student t":
-        corr = _rebuild_corr(result.params, dim)
+        corr = reconstruct_corr(result.params, dim)
         nu = result.params.get("nu")
         if corr is None or not isinstance(nu, float):
             st.warning(
-                "Student t model requires correlation entries and "
-                "nu to compute metrics."
+                "Student t model requires correlation entries and nu to "
+                "compute metrics."
             )
         else:
             try:
@@ -202,14 +432,9 @@ for idx, result in enumerate(fit_results):
         }
     )
 
-criterion_label = st.selectbox(
-    "Ranking criterion",
-    ("LogLik", "AIC", "BIC"),
-    format_func=lambda key: {
-        "LogLik": "Log-likelihood (higher is better)",
-        "AIC": "Akaike Information Criterion (lower is better)",
-        "BIC": "Bayesian Information Criterion (lower is better)",
-    }[key],
+criterion_label = "BIC"
+st.caption(
+    "Ranking criterion: Bayesian Information Criterion (lower is better)."
 )
 
 sorted_rows = sorted(rows, key=lambda row: _sort_key(criterion_label, row))
@@ -245,7 +470,7 @@ if pd is not None and altair_spec is not None:
     if not chart_source.empty:
         chart = (
             altair_module.Chart(chart_source)
-            .mark_bar(color="#2563eb")
+            .mark_bar()
             .encode(
                 x=altair_module.X(
                     "Params",
@@ -260,21 +485,64 @@ if pd is not None and altair_spec is not None:
         chart = chart.properties(width="container")
         _show_altair_chart(chart)
 
-options = [row["Index"] for row in sorted_rows]
-labels = [f"{row['Family']} ({row['Method']})" for row in sorted_rows]
-best_index = session_utils.get_best_model_index()
-if best_index in options:
-    selected_idx = options.index(best_index)
-else:
-    selected_idx = 0
+tab_options = [
+    (row["Index"], f"{row['Family']} ({row['Method']})")
+    for row in sorted_rows
+]
+option_labels = [label for _, label in tab_options]
+selected_labels = st.multiselect(
+    "Copulas to visualize",
+    option_labels,
+    default=option_labels,
+)
+selected_indices = {
+    index for index, label in tab_options if label in selected_labels
+}
+if not selected_indices:
+    st.info("Select at least one copula to render diagnostics.")
 
-choice = st.radio(
-    "Mark the best model",
-    options=list(range(len(labels))),
-    format_func=lambda idx: labels[idx],
-    index=selected_idx,
-)
-session_utils.set_best_model_index(options[choice])
-st.success(
-    f"Current best model: {labels[choice]} (criterion: {criterion_label})."
-)
+best_row = sorted_rows[0] if sorted_rows else None
+if best_row is not None:
+    session_utils.set_best_model_index(best_row["Index"])
+    st.success(
+        "Best copula by {criterion}: {label}.".format(
+            criterion=criterion_label,
+            label=f"{best_row['Family']} ({best_row['Method']})",
+        )
+    )
+
+models_for_tabs: list[tuple[str, BaseCopula]] = []
+for row in sorted_rows:
+    if row["Index"] not in selected_indices:
+        continue
+    result = fit_results[row["Index"]]
+    model = _build_copula_model(result, dim)
+    if model is None:
+        st.warning(
+            "Failed to rebuild the copula {label} for QQ diagnostics.".format(
+                label=f"{result.family} ({result.method})",
+            )
+        )
+        continue
+    tab_label = f"{result.family} ({result.method})"
+    models_for_tabs.append((tab_label, model))
+
+if not models_for_tabs:
+    st.info(
+        "No calibrated copulas are available for density diagnostics."
+    )
+else:
+    st.subheader("QQ diagnostics by copula")
+    tabs = st.tabs([label for label, _ in models_for_tabs])
+    for tab, (label, model) in zip(tabs, models_for_tabs):
+        with tab:
+            try:
+                plot_density_qq(
+                    U,
+                    model,
+                    f"{label}: density QQ diagnostics",
+                )
+            except ValueError as exc:
+                st.warning(
+                    f"Failed to render QQ diagnostics for {label}: {exc}"
+                )
