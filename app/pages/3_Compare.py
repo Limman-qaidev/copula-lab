@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import seaborn as sns
 import streamlit as st
@@ -211,94 +210,100 @@ def _build_copula_model(result: FitResult, dim: int) -> BaseCopula | None:
     return None
 
 
-def plot_copula_density(
-    U_emp: np.ndarray, copula_model: BaseCopula, title: str
+def plot_density_qq(
+    U_emp: np.ndarray,
+    copula_model: BaseCopula,
+    title: str,
+    *,
+    n_simulate: int = 5000,
+    seed: int = 1729,
 ) -> None:
     """
-    Plot empirical versus model copula density on the unit square.
+    Render QQ diagnostics comparing empirical and model densities.
 
     Assumptions
     ----------
-    - ``U_emp`` contains pseudo-observations strictly inside ``(0, 1)``.
-    - The copula model exposes a ``pdf`` method compatible with ``U_emp``.
+    - ``U_emp`` stores pseudo-observations strictly inside ``(0, 1)``.
+    - ``copula_model`` implements ``pdf`` and ``rvs`` consistently for ``dim``.
 
     Limitations
     -----------
-    - The comparison is restricted to bivariate copulas (``d = 2``).
-    - Kernel density estimates may oversmooth for multimodal structures.
+    - Diagnostics rely on Monte Carlo simulation for the theoretical sample.
+    - Very small samples may yield noisy empirical quantiles.
     """
 
     data = np.asarray(U_emp, dtype=np.float64)
-    if data.ndim != 2 or data.shape[1] != 2:
+    if data.ndim != 2:
         raise ValueError(
-            "U_emp must be a (n, 2) array of pseudo-observations."
+            "U_emp must be a 2D array of pseudo-observations."
         )
     if np.any((data <= 0.0) | (data >= 1.0)):
+        raise ValueError("Pseudo-observations must lie inside (0, 1).")
+
+    dim = data.shape[1]
+    if getattr(copula_model, "dim", dim) != dim:
         raise ValueError(
-            "Pseudo-observations must lie strictly within (0, 1)."
+            "Copula dimension does not match the pseudo-observations."
         )
 
-    fig, ax = plt.subplots(figsize=(6.0, 6.0))
-    ax.set_facecolor("white")
+    n_model = min(max(n_simulate, dim * 500), 20000)
+    simulated = copula_model.rvs(n_model, seed=seed)
+    sim_array = np.asarray(simulated, dtype=np.float64)
+    if sim_array.ndim != 2 or sim_array.shape[1] != dim:
+        raise ValueError("Simulated sample has incompatible shape.")
 
-    if data.shape[0] > 5000:
-        hexbin = ax.hexbin(
-            data[:, 0],
-            data[:, 1],
-            gridsize=60,
-            cmap="magma",
-            extent=(0.0, 1.0, 0.0, 1.0),
-        )
-        colorbar = fig.colorbar(hexbin, ax=ax)
-        colorbar.set_label("Empirical density")
-    else:
-        sns.kdeplot(
-            x=data[:, 0],
-            y=data[:, 1],
-            fill=True,
-            cmap="magma",
-            bw_adjust=0.7,
-            levels=100,
-            thresh=0.0,
-            ax=ax,
-            cbar=True,
-            cbar_kws={"label": "Empirical density"},
-        )
+    empirical_pdf = np.asarray(copula_model.pdf(data), dtype=np.float64)
+    model_pdf = np.asarray(copula_model.pdf(sim_array), dtype=np.float64)
 
-    grid = np.linspace(0.001, 0.999, 100)
-    U1, U2 = np.meshgrid(grid, grid)
-    evaluation_points = np.column_stack([U1.ravel(), U2.ravel()])
-    pdf_values = copula_model.pdf(evaluation_points)
-    pdf_grid = np.asarray(pdf_values, dtype=np.float64).reshape(100, 100)
-    if not np.all(np.isfinite(pdf_grid)):
-        raise ValueError("Model density produced non-finite values.")
+    empirical_pdf = np.log(np.clip(empirical_pdf, 1e-12, None))
+    model_pdf = np.log(np.clip(model_pdf, 1e-12, None))
 
-    ax.contour(
-        U1,
-        U2,
-        pdf_grid,
-        levels=10,
-        colors="cyan",
-        linewidths=1.0,
+    empirical_pdf = np.sort(empirical_pdf[np.isfinite(empirical_pdf)])
+    model_pdf = np.sort(model_pdf[np.isfinite(model_pdf)])
+    if empirical_pdf.size == 0 or model_pdf.size == 0:
+        raise ValueError("Density evaluation produced no finite values.")
+
+    sample_size = min(empirical_pdf.size, model_pdf.size)
+    empirical_pdf = empirical_pdf[:sample_size]
+    model_pdf = model_pdf[:sample_size]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0))
+
+    axes[0].scatter(
+        model_pdf,
+        empirical_pdf,
+        s=12,
+        alpha=0.7,
+        edgecolor="none",
     )
-    legend_handle = Line2D(
-        [0],
-        [0],
-        color="cyan",
-        linewidth=1.0,
-        label="Model density",
+    reference = np.linspace(
+        min(model_pdf[0], empirical_pdf[0]),
+        max(model_pdf[-1], empirical_pdf[-1]),
+        100,
     )
-    ax.legend(handles=[legend_handle], loc="upper right")
+    axes[0].plot(reference, reference, linestyle="--", color="black")
+    axes[0].set_xlabel("Cuantiles teóricos log f(U)")
+    axes[0].set_ylabel("Cuantiles empíricos log f(U)")
+    axes[0].set_title("QQ densidades (teórico vs empírico)")
 
-    ax.set_xlabel("u₁")
-    ax.set_ylabel("u₂")
-    ax.set_xlim(0.0, 1.0)
-    ax.set_ylim(0.0, 1.0)
-    ax.set_title(title)
-    ax.set_aspect("equal", adjustable="box")
-    ax.grid(False)
+    probabilities = (
+        (np.arange(1, sample_size + 1) - 0.5) / float(sample_size)
+    )
+    axes[1].plot(probabilities, model_pdf, label="Teórico", linewidth=1.5)
+    axes[1].plot(
+        probabilities,
+        empirical_pdf,
+        label="Empírico",
+        linewidth=1.5,
+        linestyle="--",
+    )
+    axes[1].set_xlabel("Probabilidad acumulada")
+    axes[1].set_ylabel("Cuantiles log f(U)")
+    axes[1].set_title("Funciones cuantiles comparadas")
+    axes[1].legend()
+
+    fig.suptitle(title)
     fig.tight_layout()
-
     st.pyplot(fig, clear_figure=True)
     plt.close(fig)
 
@@ -421,39 +426,44 @@ if pd is not None and altair_spec is not None:
         chart = chart.properties(width="container")
         _show_altair_chart(chart)
 
-options = [row["Index"] for row in sorted_rows]
-labels = [f"{row['Family']} ({row['Method']})" for row in sorted_rows]
-best_index = session_utils.get_best_model_index()
-if best_index in options:
-    selected_idx = options.index(best_index)
-else:
-    selected_idx = 0
-
-choice = st.radio(
-    "Mark the best model",
-    options=list(range(len(labels))),
-    format_func=lambda idx: labels[idx],
-    index=selected_idx,
-)
-session_utils.set_best_model_index(options[choice])
-st.success(
-    f"Current best model: {labels[choice]} (criterion: {criterion_label})."
-)
-
-selected_result = fit_results[options[choice]]
-model = _build_copula_model(selected_result, dim)
-
-if dim != 2:
-    st.info(
-        "Copula density comparison is available only for bivariate data."
+best_row = sorted_rows[0] if sorted_rows else None
+if best_row is not None:
+    session_utils.set_best_model_index(best_row["Index"])
+    st.success(
+        "Mejor copula según {criterion}: {label}.".format(
+            criterion=criterion_label,
+            label=f"{best_row['Family']} ({best_row['Method']})",
+        )
     )
-elif model is None:
+
+models_for_tabs: list[tuple[str, BaseCopula]] = []
+for row in sorted_rows:
+    result = fit_results[row["Index"]]
+    model = _build_copula_model(result, dim)
+    if model is None:
+        st.warning(
+            "No fue posible reconstruir la copula {label} para QQ.".format(
+                label=f"{result.family} ({result.method})",
+            )
+        )
+        continue
+    tab_label = f"{result.family} ({result.method})"
+    models_for_tabs.append((tab_label, model))
+
+if not models_for_tabs:
     st.info(
-        "Unable to reconstruct the selected copula for density visualization."
+        "No hay copulas calibradas disponibles para comparar las densidades."
     )
 else:
-    st.subheader("Empirical vs Model Density")
-    try:
-        plot_copula_density(U[:, :2], model, "Copula Density Comparison")
-    except ValueError as exc:
-        st.warning(f"Density plot failed: {exc}")
+    st.subheader("Comparación de densidades mediante QQ")
+    tabs = st.tabs([label for label, _ in models_for_tabs])
+    for tab, (label, model) in zip(tabs, models_for_tabs):
+        with tab:
+            try:
+                plot_density_qq(
+                    U,
+                    model,
+                    f"{label}: diagnóstico QQ de densidades",
+                )
+            except ValueError as exc:
+                st.warning(f"No se pudo generar el QQ para {label}: {exc}")
