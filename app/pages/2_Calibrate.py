@@ -175,6 +175,30 @@ def _fit_gaussian_tau(
         display,
     )
 
+    if not session_utils.has_U():
+        st.error("Pseudo-observations are required before calibration.")
+        st.page_link("pages/1_Data.py", label="Open Data page", icon="📄")
+        st.stop()
+
+def _fit_gaussian_ifm(
+    U: FloatArray, labels: Tuple[str, ...] | None
+) -> Tuple[FitResult, Tuple[str, ...]]:
+    corr = gaussian_ifm_corr(U)
+    loglik = gaussian_pseudo_loglik(U, corr)
+    k_params = U.shape[1] * (U.shape[1] - 1) // 2
+    aic, bic = information_criteria(loglik, k_params=k_params, n=U.shape[0])
+    params, display = _flatten_corr(corr, labels)
+    return (
+        FitResult(
+            family="Gaussian",
+            params=params,
+            method="IFM",
+            loglik=loglik,
+            aic=aic,
+            bic=bic,
+        ),
+        display,
+    )
 
 def _fit_gaussian_ifm(
     U: FloatArray, labels: Tuple[str, ...] | None

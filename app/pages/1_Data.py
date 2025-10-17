@@ -55,6 +55,15 @@ def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
             pass
     dataframe_renderer(data, use_container_width=True, hide_index=hide_index)
 
+def _load_preview(
+    raw: bytes,
+    columns: Iterable[str],
+    encoding: str,
+    header: List[str],
+) -> np.ndarray:
+    selected = list(columns)
+    if not selected:
+        raise ValueError("Select at least one column for the preview.")
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:
     try:
