@@ -48,8 +48,10 @@ from src.utils.results import FitResult  # noqa: E402
 from src.utils.types import FloatArray  # noqa: E402
 
 try:  # pragma: no cover - scipy optional in some deployments
+    from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
     from scipy.stats import norm  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - handled by fallback implementation
+    minimize_scalar = None  # type: ignore[assignment]
     norm = None
 
 GaussianMatrixFunc = Callable[[FloatArray], FloatArray]
@@ -79,6 +81,27 @@ def _gaussian_ifm_corr_fallback(U: FloatArray) -> FloatArray:
 
 
 ifm_callable: GaussianMatrixFunc | None = _gaussian_ifm_corr
+
+
+def _estimate_student_nu(
+    U: FloatArray, corr: NDArray[np.float64]
+) -> float:
+    if minimize_scalar is None:
+        lambda_upper = average_tail_dep_upper(U)
+        return choose_nu_from_tail(lambda_upper)
+
+    def objective(nu_val: float) -> float:
+        if nu_val <= 2.05:
+            return float("inf")
+        return -student_t_pseudo_loglik(U, corr, nu_val)
+
+    result = minimize_scalar(
+        objective, bounds=(2.05, 60.0), method="bounded"
+    )
+    if not result.success:
+        lambda_upper = average_tail_dep_upper(U)
+        return choose_nu_from_tail(lambda_upper)
+    return float(result.x)
 
 
 def gaussian_ifm_corr(U: FloatArray) -> FloatArray:
@@ -206,8 +229,7 @@ def _calibrate_student_tau(
 ) -> CalibrationOutcome:
     tau_matrix = kendall_tau_matrix(U)
     corr = rho_matrix_from_tau_student_t(tau_matrix)
-    lambda_upper = average_tail_dep_upper(U)
-    nu = choose_nu_from_tail(lambda_upper)
+    nu = _estimate_student_nu(U, corr)
     loglik = student_t_pseudo_loglik(U, corr, nu)
     k_params = U.shape[1] * (U.shape[1] - 1) // 2 + 1
     aic, bic = information_criteria(loglik, k_params=k_params, n=U.shape[0])
