@@ -5,21 +5,44 @@ import inspect
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Protocol
 
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
+import seaborn as sns
 import streamlit as st
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+try:  # pragma: no cover - optional dependency for type hints
+    from copulas.base import BaseCopula  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - fallback for local models
+
+    class BaseCopula(Protocol):
+        """Protocol describing the minimal PDF interface for copulas."""
+
+        def pdf(self, U: np.ndarray) -> np.ndarray:
+            """Evaluate the copula density on points inside (0, 1)^d."""
+
+from src.models.copulas.archimedean import (  # noqa: E402
+    AMHCopula,
+    ClaytonCopula,
+    FrankCopula,
+    GumbelCopula,
+    JoeCopula,
+)
+from src.models.copulas.gaussian import GaussianCopula  # noqa: E402
+from src.models.copulas.student_t import StudentTCopula  # noqa: E402
 from src.utils import session as session_utils  # noqa: E402
 from src.utils.modelsel import (  # noqa: E402
     gaussian_pseudo_loglik,
     information_criteria,
     student_t_pseudo_loglik,
 )
+from src.utils.results import FitResult  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +163,144 @@ def _rebuild_corr(params: Mapping[str, float], dim: int) -> np.ndarray | None:
         matrix[i, j] = matrix[j, i] = float(value)
         found = True
     return matrix if found else None
+
+
+def _build_copula_model(result: FitResult, dim: int) -> BaseCopula | None:
+    """Instantiate a copula model from stored calibration parameters."""
+
+    if result.family == "Gaussian":
+        corr = _rebuild_corr(result.params, dim)
+        if corr is None:
+            return None
+        return GaussianCopula(corr=corr)
+
+    if result.family == "Student t":
+        corr = _rebuild_corr(result.params, dim)
+        nu_value = result.params.get("nu")
+        if corr is None or nu_value is None:
+            return None
+        return StudentTCopula(corr=corr, nu=float(nu_value))
+
+    theta_value = result.params.get("theta")
+    if theta_value is None:
+        return None
+
+    theta = float(theta_value)
+    if result.family == "Clayton":
+        return ClaytonCopula(theta=theta, dim=dim)
+    if result.family == "Gumbel":
+        return GumbelCopula(theta=theta, dim=dim)
+    if result.family == "Frank":
+        return FrankCopula(theta=theta, dim=dim)
+    if result.family == "Joe":
+        return JoeCopula(theta=theta, dim=dim)
+    if result.family == "AMH":
+        if dim != 2:
+            logger.warning(
+                "AMH copula visualization requires two dimensions; "
+                "received %d.",
+                dim,
+            )
+            return None
+        return AMHCopula(theta=theta)
+
+    logger.warning(
+        "Unsupported copula family for visualization: %s",
+        result.family,
+    )
+    return None
+
+
+def plot_copula_density(
+    U_emp: np.ndarray, copula_model: BaseCopula, title: str
+) -> None:
+    """
+    Plot empirical versus model copula density on the unit square.
+
+    Assumptions
+    ----------
+    - ``U_emp`` contains pseudo-observations strictly inside ``(0, 1)``.
+    - The copula model exposes a ``pdf`` method compatible with ``U_emp``.
+
+    Limitations
+    -----------
+    - The comparison is restricted to bivariate copulas (``d = 2``).
+    - Kernel density estimates may oversmooth for multimodal structures.
+    """
+
+    data = np.asarray(U_emp, dtype=np.float64)
+    if data.ndim != 2 or data.shape[1] != 2:
+        raise ValueError(
+            "U_emp must be a (n, 2) array of pseudo-observations."
+        )
+    if np.any((data <= 0.0) | (data >= 1.0)):
+        raise ValueError(
+            "Pseudo-observations must lie strictly within (0, 1)."
+        )
+
+    fig, ax = plt.subplots(figsize=(6.0, 6.0))
+    ax.set_facecolor("white")
+
+    if data.shape[0] > 5000:
+        hexbin = ax.hexbin(
+            data[:, 0],
+            data[:, 1],
+            gridsize=60,
+            cmap="magma",
+            extent=(0.0, 1.0, 0.0, 1.0),
+        )
+        colorbar = fig.colorbar(hexbin, ax=ax)
+        colorbar.set_label("Empirical density")
+    else:
+        sns.kdeplot(
+            x=data[:, 0],
+            y=data[:, 1],
+            fill=True,
+            cmap="magma",
+            bw_adjust=0.7,
+            levels=100,
+            thresh=0.0,
+            ax=ax,
+            cbar=True,
+            cbar_kws={"label": "Empirical density"},
+        )
+
+    grid = np.linspace(0.001, 0.999, 100)
+    U1, U2 = np.meshgrid(grid, grid)
+    evaluation_points = np.column_stack([U1.ravel(), U2.ravel()])
+    pdf_values = copula_model.pdf(evaluation_points)
+    pdf_grid = np.asarray(pdf_values, dtype=np.float64).reshape(100, 100)
+    if not np.all(np.isfinite(pdf_grid)):
+        raise ValueError("Model density produced non-finite values.")
+
+    ax.contour(
+        U1,
+        U2,
+        pdf_grid,
+        levels=10,
+        colors="cyan",
+        linewidths=1.0,
+    )
+    legend_handle = Line2D(
+        [0],
+        [0],
+        color="cyan",
+        linewidth=1.0,
+        label="Model density",
+    )
+    ax.legend(handles=[legend_handle], loc="upper right")
+
+    ax.set_xlabel("u₁")
+    ax.set_ylabel("u₂")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_title(title)
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(False)
+    fig.tight_layout()
+
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
 
 rows: list[dict[str, Any]] = []
@@ -278,3 +439,21 @@ session_utils.set_best_model_index(options[choice])
 st.success(
     f"Current best model: {labels[choice]} (criterion: {criterion_label})."
 )
+
+selected_result = fit_results[options[choice]]
+model = _build_copula_model(selected_result, dim)
+
+if dim != 2:
+    st.info(
+        "Copula density comparison is available only for bivariate data."
+    )
+elif model is None:
+    st.info(
+        "Unable to reconstruct the selected copula for density visualization."
+    )
+else:
+    st.subheader("Empirical vs Model Density")
+    try:
+        plot_copula_density(U[:, :2], model, "Copula Density Comparison")
+    except ValueError as exc:
+        st.warning(f"Density plot failed: {exc}")
