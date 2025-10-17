@@ -6,12 +6,14 @@ from typing import Callable, Dict, Mapping, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from src.utils.types import FloatArray  # noqa: E402
+
+_gaussian_ifm_corr_impl: Callable[[FloatArray], FloatArray] | None
+
 try:  # pragma: no cover - optional dependency in some deployments
-    from src.estimators.ifm import (  # type: ignore[import-untyped]
-        gaussian_ifm_corr as _gaussian_ifm_corr,
-    )
+    from src.estimators.ifm import gaussian_ifm_corr as _gaussian_ifm_corr_impl
 except ImportError:  # pragma: no cover - fallback exercised in app runtime
-    _gaussian_ifm_corr = None
+    _gaussian_ifm_corr_impl = None
 
 from src.estimators.student_t import (  # noqa: E402
     student_t_ifm,
@@ -45,7 +47,6 @@ from src.utils.modelsel import (  # noqa: E402
     student_t_pseudo_loglik,
 )
 from src.utils.results import FitResult  # noqa: E402
-from src.utils.types import FloatArray  # noqa: E402
 
 try:  # pragma: no cover - scipy optional in some deployments
     from scipy.optimize import (  # type: ignore[import-untyped]
@@ -54,8 +55,8 @@ try:  # pragma: no cover - scipy optional in some deployments
     )
     from scipy.stats import norm  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - handled by fallback implementation
-    minimize = None  # type: ignore[assignment]
-    minimize_scalar = None  # type: ignore[assignment]
+    minimize = None
+    minimize_scalar = None
     norm = None
 
 GaussianMatrixFunc = Callable[[FloatArray], FloatArray]
@@ -100,6 +101,11 @@ def _project_to_correlation(matrix: FloatArray) -> NDArray[np.float64]:
     np.fill_diagonal(corr, 1.0)
     return np.asarray(corr, dtype=np.float64)
 
+
+if _gaussian_ifm_corr_impl is not None:
+    _gaussian_ifm_corr: GaussianMatrixFunc | None = _gaussian_ifm_corr_impl
+else:
+    _gaussian_ifm_corr = None
 
 ifm_callable: GaussianMatrixFunc | None = _gaussian_ifm_corr
 
@@ -292,6 +298,7 @@ def _calibrate_gaussian_loglik(
     if minimize is None:
         corr_hat = corr0
     else:
+
         def objective(theta: NDArray[np.float64]) -> float:
             try:
                 corr_candidate = _corr_from_params(theta, dim)

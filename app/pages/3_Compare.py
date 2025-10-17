@@ -5,7 +5,7 @@ import inspect
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Iterable, Mapping, Protocol, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,18 +16,16 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-try:  # pragma: no cover - optional dependency for type hints
-    from copulas.base import BaseCopula  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover - fallback for local models
 
-    class BaseCopula(Protocol):
-        """Protocol describing the minimal copula interface for diagnostics."""
+class BaseCopula(Protocol):
+    """Protocol describing the minimal copula interface for diagnostics."""
 
-        def pdf(self, U: np.ndarray) -> np.ndarray:
-            """Evaluate the copula density on points inside (0, 1)^d."""
+    def pdf(self, U: np.ndarray) -> np.ndarray:
+        """Evaluate the copula density on points inside (0, 1)^d."""
 
-        def rvs(self, n: int, seed: int | None = None) -> np.ndarray:
-            """Draw random variates from the copula."""
+    def rvs(self, n: int, seed: int | None = None) -> np.ndarray:
+        """Draw random variates from the copula."""
+
 
 from src.models.copulas.archimedean import (  # noqa: E402
     AMHCopula,
@@ -101,9 +99,7 @@ if not fit_results:
 st.write(f"Models available for comparison: {len(fit_results)}")
 
 specs_for_dim = get_specs_for_dimension(dim)
-existing_pairs = {
-    (result.family, result.method) for result in fit_results
-}
+existing_pairs = {(result.family, result.method) for result in fit_results}
 missing_specs = [
     spec
     for spec in specs_for_dim
@@ -164,6 +160,14 @@ def _load_pandas() -> Any:
     return pd
 
 
+def _import_seaborn() -> Any | None:
+    """Return the seaborn module if available."""
+
+    if importlib.util.find_spec("seaborn") is None:
+        return None
+    return importlib.import_module("seaborn")
+
+
 def _show_altair_chart(chart: Any) -> None:
     """Render an Altair chart using a width-aware fallback."""
 
@@ -201,9 +205,7 @@ def _format_metrics(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "—"
 
 
-def _rebuild_corr(
-    params: Mapping[str, float], dim: int
-) -> np.ndarray | None:
+def _rebuild_corr(params: Mapping[str, float], dim: int) -> np.ndarray | None:
     """Backward-compatible alias retained for persisted sessions."""
 
     return reconstruct_corr(params, dim)
@@ -266,9 +268,7 @@ def plot_density_comparison(
 
     data = np.asarray(U_emp, dtype=np.float64)
     if data.ndim != 2:
-        raise ValueError(
-            "U_emp must be a 2D array of pseudo-observations."
-        )
+        raise ValueError("U_emp must be a 2D array of pseudo-observations.")
     if data.shape[1] != 2:
         raise ValueError(
             "Density comparison is implemented for bivariate copulas only."
@@ -282,7 +282,9 @@ def plot_density_comparison(
     model_pdf = copula_model.pdf(grid_points).reshape(u1.shape)
 
     fig, ax = plt.subplots(figsize=(6.0, 5.0))
-    if data.shape[0] > 5000:
+    sns_module = _import_seaborn()
+    use_hexbin = data.shape[0] > 5000 or sns_module is None
+    if use_hexbin:
         hex_map = ax.hexbin(
             data[:, 0],
             data[:, 1],
@@ -292,7 +294,9 @@ def plot_density_comparison(
         )
         fig.colorbar(hex_map, ax=ax, label="Empirical density")
     else:
-        kde = sns.kdeplot(
+        assert sns_module is not None
+        sns_any = cast(Any, sns_module)
+        kde = sns_any.kdeplot(
             x=data[:, 0],
             y=data[:, 1],
             fill=True,
@@ -307,6 +311,8 @@ def plot_density_comparison(
                 ax=ax,
                 label="Empirical density",
             )
+    if sns_module is None:
+        st.info("Install seaborn to access KDE-based diagnostics.")
 
     ax.contour(
         u1,
@@ -439,8 +445,7 @@ if pd is not None and altair_spec is not None:
         _show_altair_chart(chart)
 
 tab_options = [
-    (row["Index"], f"{row['Family']} ({row['Method']})")
-    for row in sorted_rows
+    (row["Index"], f"{row['Family']} ({row['Method']})") for row in sorted_rows
 ]
 option_labels = [label for _, label in tab_options]
 selected_labels = st.multiselect(
@@ -480,9 +485,7 @@ for row in sorted_rows:
     models_for_tabs.append((tab_label, model))
 
 if not models_for_tabs:
-    st.info(
-        "No calibrated copulas are available for density diagnostics."
-    )
+    st.info("No calibrated copulas are available for density diagnostics.")
 else:
     st.subheader("Density comparison by copula")
     tabs = st.tabs([label for label, _ in models_for_tabs])

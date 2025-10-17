@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 import pytest
@@ -26,7 +27,7 @@ from src.workflows.calibration import (  # noqa: E402
 
 
 def _assert_corr_close(
-    params: dict[str, float], expected: np.ndarray, atol: float
+    params: Mapping[str, float], expected: np.ndarray, atol: float
 ) -> None:
     corr_hat = reconstruct_corr(params, expected.shape[0])
     assert corr_hat is not None
@@ -96,14 +97,10 @@ def test_student_low_nu_recovery() -> None:
     samples = StudentTCopula(corr=corr_true, nu=nu_true).rvs(22000, seed=13)
 
     outcome_tau = run_calibration("Student t", "Tau inversion", samples)
-    assert outcome_tau.result.params["nu"] == pytest.approx(
-        nu_true, abs=0.1
-    )
+    assert outcome_tau.result.params["nu"] == pytest.approx(nu_true, abs=0.1)
 
     outcome_ifm = run_calibration("Student t", "IFM", samples)
-    assert outcome_ifm.result.params["nu"] == pytest.approx(
-        nu_true, abs=0.1
-    )
+    assert outcome_ifm.result.params["nu"] == pytest.approx(nu_true, abs=0.1)
 
 
 def test_student_loglik_recovers_parameters() -> None:

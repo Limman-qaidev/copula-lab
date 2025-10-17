@@ -355,9 +355,11 @@ if st.button("Run end-to-end study", type="primary"):
     ordered_items = sorted(
         artifacts.calibrations.items(),
         key=lambda item: (
-            family_order.index(item[0][0])
-            if item[0][0] in family_order
-            else len(family_order),
+            (
+                family_order.index(item[0][0])
+                if item[0][0] in family_order
+                else len(family_order)
+            ),
             item[0][1],
         ),
     )

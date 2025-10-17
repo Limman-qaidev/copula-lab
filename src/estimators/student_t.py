@@ -7,7 +7,7 @@ from typing import List, Tuple
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize  # type: ignore[import-untyped]
-from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
+from scipy.optimize import minimize_scalar
 from scipy.stats import t as student_t  # type: ignore[import-untyped]
 
 from src.estimators.tau_inversion import choose_nu_from_tail
@@ -153,9 +153,7 @@ def student_t_ifm(u: FloatArray) -> Tuple[NDArray[np.float64], float]:
 
     data = _validate_u(u)
     tail_pairs = _empirical_tail_per_pair(data)
-    lambda_upper = (
-        float(np.mean(tail_pairs)) if tail_pairs.size > 0 else 0.0
-    )
+    lambda_upper = float(np.mean(tail_pairs)) if tail_pairs.size > 0 else 0.0
     clipped = np.clip(data, _CLIP, 1.0 - _CLIP)
 
     def corr_from_nu(nu_val: float) -> NDArray[np.float64]:
@@ -181,9 +179,7 @@ def student_t_ifm(u: FloatArray) -> Tuple[NDArray[np.float64], float]:
             nu_hat = float(result.x)
             corr_hat = corr_from_nu(nu_hat)
             if refine_tail:
-                nu_refined = _refine_nu_from_tail(
-                    corr_hat, nu_hat, tail_pairs
-                )
+                nu_refined = _refine_nu_from_tail(corr_hat, nu_hat, tail_pairs)
                 if abs(nu_refined - nu_hat) > 1e-6:
                     nu_hat = nu_refined
                     corr_hat = corr_from_nu(nu_hat)
