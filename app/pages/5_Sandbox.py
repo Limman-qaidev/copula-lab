@@ -541,7 +541,7 @@ def _plot_samples(
         columns=[f"{prefix}{i + 1}" for i in range(dim)],
     )
     if dim == 2:
-        fig, ax = plt.subplots(figsize=(6, 5))
+        fig, ax = plt.subplots(figsize=(5.5, 4.5))
         sns.kdeplot(
             data=df,
             x=f"{prefix}1",
@@ -565,18 +565,19 @@ def _plot_samples(
         if unit_cube:
             ax.set_xlim(0.0, 1.0)
             ax.set_ylim(0.0, 1.0)
-        st.pyplot(fig, clear_figure=True)
+        st.pyplot(fig, clear_figure=True, use_container_width=True)
         return
     if dim <= _PAIRPLOT_MAX_DIM:
         grid = sns.pairplot(df.sample(min(len(df), 2000)), corner=True)
+        grid.fig.set_size_inches(6.0, 6.0)
         grid.fig.suptitle(title, y=1.02)
-        st.pyplot(grid.fig, clear_figure=True)
+        st.pyplot(grid.fig, clear_figure=True, use_container_width=True)
         return
     corr = df.corr()
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
     sns.heatmap(corr, ax=ax, cmap="magma", vmin=-1.0, vmax=1.0)
     ax.set_title(f"{title} — correlation heatmap")
-    st.pyplot(fig, clear_figure=True)
+    st.pyplot(fig, clear_figure=True, use_container_width=True)
 
 
 def _render_custom_builder(dim: int) -> Tuple[str, str]:
@@ -628,7 +629,7 @@ def _preview_custom_functions(
         st.warning(f"Failed to evaluate C(u): {exc}")
         cdf_vals = None
 
-    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    fig, ax = plt.subplots(1, 2, figsize=(8.0, 3.6))
     cs = ax[0].contourf(u1, u2, density, cmap="magma", levels=40)
     ax[0].set_title("Declared density c(u)")
     ax[0].set_xlabel("u₁")
@@ -643,7 +644,7 @@ def _preview_custom_functions(
         fig.colorbar(cs2, ax=ax[1])
     else:
         ax[1].axis("off")
-    st.pyplot(fig, clear_figure=True)
+    st.pyplot(fig, clear_figure=True, use_container_width=True)
 
 
 st.title("Sandbox")
