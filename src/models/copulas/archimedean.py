@@ -360,7 +360,8 @@ class GumbelCopula:
         )
         stable = np.maximum(stable, _CLIP)
         e = rng.exponential(scale=1.0, size=(n, self.dim))
-        base = np.exp(-e / np.power(stable[:, None], alpha))
+        ratios = e / stable[:, None]
+        base = np.exp(-np.power(ratios, alpha))
         return np.asarray(np.clip(base, _CLIP, 1.0 - _CLIP), dtype=np.float64)
 
     def cond_cdf(self, u: NDArray[np.float64]) -> NDArray[np.float64]:
