@@ -7,6 +7,7 @@ from typing import List, Tuple
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize  # type: ignore[import-untyped]
+from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
 from scipy.stats import t as student_t  # type: ignore[import-untyped]
 
 from src.estimators.tau_inversion import choose_nu_from_tail
@@ -81,12 +82,31 @@ def student_t_ifm(u: FloatArray) -> Tuple[NDArray[np.float64], float]:
 
     data = _validate_u(u)
     lambda_upper = average_tail_dep_upper(data)
-    nu_hat = float(max(2.1, choose_nu_from_tail(lambda_upper)))
     clipped = np.clip(data, _CLIP, 1.0 - _CLIP)
-    quantiles = student_t.ppf(clipped, df=nu_hat)
-    corr = np.corrcoef(quantiles, rowvar=False)
-    corr = _project_to_correlation(np.asarray(corr, dtype=np.float64))
-    return corr, nu_hat
+
+    def corr_from_nu(nu_val: float) -> NDArray[np.float64]:
+        quantiles = student_t.ppf(clipped, df=nu_val)
+        sample_corr = np.corrcoef(quantiles, rowvar=False)
+        corr_matrix = np.asarray(sample_corr, dtype=np.float64)
+        return _project_to_correlation(corr_matrix)
+
+    def objective(nu_val: float) -> float:
+        if nu_val <= 2.05:
+            return float("inf")
+        corr_candidate = corr_from_nu(nu_val)
+        return -student_t_pseudo_loglik(data, corr_candidate, nu_val)
+
+    nu_initial = float(max(2.1, choose_nu_from_tail(lambda_upper)))
+    if minimize_scalar is not None:
+        result = minimize_scalar(
+            objective, bounds=(2.05, 60.0), method="bounded"
+        )
+        if result.success:
+            nu_hat = float(result.x)
+            return corr_from_nu(nu_hat), nu_hat
+
+    corr = corr_from_nu(nu_initial)
+    return corr, nu_initial
 
 
 def _initial_guesses(
