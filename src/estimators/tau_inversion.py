@@ -151,7 +151,7 @@ def _tau_joe(theta: float) -> float:
         return 0.0
     total = 0.0
     for k in range(1, 10000):
-        term = 1.0 / (k * (theta * k + 2.0) * (theta * (k + 1) + 2.0))
+        term = 1.0 / (k * (k + 1.0) * (theta * k + 2.0))
         total += term
         if term < 1e-12:
             break
