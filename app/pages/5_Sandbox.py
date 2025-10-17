@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import ast
 import io
-from typing import Callable, Dict, Mapping, Tuple
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Mapping, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy import stats
 import streamlit as st
 
 from src.models.copulas.archimedean import (
@@ -29,20 +31,111 @@ _DEFAULT_DIMENSION = 2
 _PAIRPLOT_MAX_DIM = 6
 
 
-def _make_equicorr(dim: int, rho: float) -> np.ndarray:
-    """Return an equicorrelation matrix compatible with the requested dim."""
+ParamDict = Dict[str, float | np.ndarray]
 
-    lower = -1.0 / (dim - 1)
-    if not (lower < rho < 0.999999):
-        raise ValueError(
-            "Equicorrelation rho must lie in (-1/(d-1), 0.999999)."
-        )
-    corr = np.full((dim, dim), rho, dtype=np.float64)
+
+@dataclass(frozen=True)
+class MarginalParameter:
+    """Specification for a scalar marginal parameter."""
+
+    name: str
+    label: str
+    default: float
+    min_value: float
+    max_value: float
+    step: float
+
+
+@dataclass
+class MarginalSelection:
+    """User-selected marginal distribution and its parameters."""
+
+    name: str
+    params: Dict[str, float]
+
+
+MARGINAL_LIBRARY: Dict[str, Tuple[MarginalParameter, ...]] = {
+    "Uniform (0, 1)": tuple(),
+    "Normal": (
+        MarginalParameter("mean", "Mean", 0.0, -5.0, 5.0, 0.1),
+        MarginalParameter("std", "Standard deviation", 1.0, 0.1, 5.0, 0.1),
+    ),
+    "Student t": (
+        MarginalParameter("df", "Degrees of freedom", 5.0, 2.1, 30.0, 0.1),
+        MarginalParameter("loc", "Location", 0.0, -5.0, 5.0, 0.1),
+        MarginalParameter("scale", "Scale", 1.0, 0.1, 5.0, 0.1),
+    ),
+    "Lognormal": (
+        MarginalParameter("mean", "Log-mean", 0.0, -2.0, 2.0, 0.05),
+        MarginalParameter(
+            "sigma",
+            "Log-standard deviation",
+            0.25,
+            0.05,
+            1.5,
+            0.05,
+        ),
+    ),
+    "Exponential": (
+        MarginalParameter("rate", "Rate", 1.0, 0.05, 5.0, 0.05),
+    ),
+    "Gamma": (
+        MarginalParameter("shape", "Shape", 2.0, 0.2, 10.0, 0.1),
+        MarginalParameter("scale", "Scale", 1.0, 0.1, 5.0, 0.1),
+    ),
+    "Beta": (
+        MarginalParameter("alpha", "Alpha", 2.0, 0.2, 10.0, 0.1),
+        MarginalParameter("beta", "Beta", 2.0, 0.2, 10.0, 0.1),
+    ),
+}
+
+MARGINAL_OPTIONS = tuple(MARGINAL_LIBRARY.keys())
+
+
+def _default_corr_frame(dim: int) -> pd.DataFrame:
+    """Return an identity matrix formatted for editing."""
+
+    values = np.eye(dim, dtype=np.float64)
+    labels = [f"u{i + 1}" for i in range(dim)]
+    return pd.DataFrame(values, columns=labels, index=labels)
+
+
+def _render_corr_matrix(dim: int) -> np.ndarray:
+    """Display and validate a user-edited correlation matrix."""
+
+    session_key = f"sandbox_corr_default_{dim}"
+    default = st.session_state.get(session_key)
+    if not isinstance(default, pd.DataFrame) or default.shape != (dim, dim):
+        default = _default_corr_frame(dim)
+    st.caption(
+        "Edit the correlation matrix (values in [-0.99, 0.99], "
+        "diagonal fixed)."
+    )
+    editor_key = f"corr_editor_{dim}"
+    edited = st.data_editor(
+        default,
+        key=editor_key,
+        num_rows="fixed",
+        use_container_width=True,
+    )
+    st.session_state[session_key] = edited
+    corr = edited.to_numpy(dtype=np.float64)
+    if corr.shape != (dim, dim):
+        raise ValueError("Correlation matrix shape is invalid.")
+    corr = (corr + corr.T) / 2.0
     np.fill_diagonal(corr, 1.0)
+    off_diag = corr - np.eye(dim)
+    if np.any(np.abs(off_diag) >= 0.999):
+        raise ValueError("Correlation magnitudes must be below 0.999.")
+    if not np.allclose(corr, corr.T, atol=1e-8):
+        raise ValueError("Correlation matrix must be symmetric.")
+    eigenvalues = np.linalg.eigvalsh(corr)
+    if np.any(eigenvalues <= 0.0):
+        raise ValueError("Correlation matrix must be positive definite.")
     return corr
 
 
-def _render_preset_controls(dim: int) -> Tuple[str, Mapping[str, float]]:
+def _render_preset_controls(dim: int) -> Tuple[str, ParamDict]:
     """Render preset parameter controls and return the selection."""
 
     family = st.selectbox(
@@ -57,20 +150,14 @@ def _render_preset_controls(dim: int) -> Tuple[str, Mapping[str, float]]:
             "AMH",
         ),
     )
-    params: Dict[str, float] = {}
+    params: ParamDict = {}
     if family in {"Gaussian", "Student t"}:
-        rho = st.slider(
-            "Equicorrelation parameter (rho)",
-            min_value=float(max(-0.95, -1.0 / (dim - 1) + 1e-3)),
-            max_value=0.95,
-            value=0.4,
-            step=0.01,
-        )
-        params["rho"] = float(rho)
+        corr = _render_corr_matrix(dim)
+        params["corr"] = corr
         if family == "Student t":
             nu = st.slider(
                 "Degrees of freedom (nu)",
-                min_value=2.2,
+                min_value=2.1,
                 max_value=30.0,
                 value=6.0,
                 step=0.1,
@@ -129,18 +216,28 @@ def _render_preset_controls(dim: int) -> Tuple[str, Mapping[str, float]]:
 def _sample_preset(
     family: str,
     dim: int,
-    params: Mapping[str, float],
+    params: Mapping[str, float | np.ndarray],
     n: int,
     seed: int | None,
 ) -> np.ndarray:
     """Generate samples from a preset copula selection."""
 
     if family == "Gaussian":
-        corr = _make_equicorr(dim, params["rho"])
-        return GaussianCopula(corr=corr).rvs(n, seed=seed)
+        corr_param = params.get("corr")
+        if not isinstance(corr_param, np.ndarray):
+            raise ValueError("Gaussian copula requires a correlation matrix.")
+        return GaussianCopula(corr=corr_param).rvs(n, seed=seed)
     if family == "Student t":
-        corr = _make_equicorr(dim, params["rho"])
-        return StudentTCopula(corr=corr, nu=params["nu"]).rvs(n, seed=seed)
+        corr_param = params.get("corr")
+        nu_param = params.get("nu")
+        if not isinstance(corr_param, np.ndarray) or nu_param is None:
+            raise ValueError(
+                "Student t copula requires correlation matrix and nu."
+            )
+        return StudentTCopula(corr=corr_param, nu=float(nu_param)).rvs(
+            n,
+            seed=seed,
+        )
     if family == "Clayton":
         return ClaytonCopula(theta=params["theta"], dim=dim).rvs(n, seed=seed)
     if family == "Gumbel":
@@ -262,12 +359,164 @@ def _sample_custom_density(
     return candidates[indices]
 
 
-def _summarise_samples(samples: np.ndarray) -> pd.DataFrame:
+def _render_marginal_controls(dim: int) -> Tuple[MarginalSelection, ...]:
+    """Collect marginal distribution choices from the user."""
+
+    st.subheader("Marginal distributions")
+    st.caption(
+        "Choose an output distribution for each variable. Uniform margins "
+        "leave the pseudo-observations unchanged."
+    )
+    selections: List[MarginalSelection] = []
+    for idx in range(dim):
+        label = f"Variable X{idx + 1}"
+        expanded = idx < 2
+        with st.expander(label, expanded=expanded):
+            option_key = f"marginal_name_{dim}_{idx}"
+            name = st.selectbox(
+                "Distribution",
+                options=MARGINAL_OPTIONS,
+                key=option_key,
+            )
+            params: Dict[str, float] = {}
+            for parameter in MARGINAL_LIBRARY[name]:
+                field_key = f"marginal_param_{dim}_{idx}_{parameter.name}"
+                value = st.number_input(
+                    parameter.label,
+                    min_value=parameter.min_value,
+                    max_value=parameter.max_value,
+                    value=parameter.default,
+                    step=parameter.step,
+                    key=field_key,
+                )
+                params[parameter.name] = float(value)
+            selections.append(MarginalSelection(name=name, params=params))
+    return tuple(selections)
+
+
+def _build_margin_transform(
+    name: str, params: Mapping[str, float]
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Return a transformation that maps U to the chosen marginal."""
+
+    def clip(values: np.ndarray) -> np.ndarray:
+        return np.clip(values, _CLIP, 1.0 - _CLIP)
+
+    if name == "Uniform (0, 1)":
+        return lambda u: np.asarray(u, dtype=np.float64)
+    if name == "Normal":
+        mean = params.get("mean", 0.0)
+        std = params.get("std", 1.0)
+        if std <= 0.0:
+            raise ValueError("Normal standard deviation must be positive.")
+        dist = stats.norm(loc=mean, scale=std)
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    if name == "Student t":
+        df = params.get("df", 5.0)
+        loc = params.get("loc", 0.0)
+        scale = params.get("scale", 1.0)
+        if df <= 2.0:
+            raise ValueError("Student t degrees of freedom must exceed 2.")
+        if scale <= 0.0:
+            raise ValueError("Student t scale must be positive.")
+        dist = stats.t(df, loc=loc, scale=scale)
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    if name == "Lognormal":
+        mean = params.get("mean", 0.0)
+        sigma = params.get("sigma", 0.25)
+        if sigma <= 0.0:
+            raise ValueError("Lognormal sigma must be positive.")
+        dist = stats.lognorm(s=sigma, scale=np.exp(mean))
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    if name == "Exponential":
+        rate = params.get("rate", 1.0)
+        if rate <= 0.0:
+            raise ValueError("Exponential rate must be positive.")
+        dist = stats.expon(scale=1.0 / rate)
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    if name == "Gamma":
+        shape = params.get("shape", 2.0)
+        scale = params.get("scale", 1.0)
+        if shape <= 0.0 or scale <= 0.0:
+            raise ValueError("Gamma shape and scale must be positive.")
+        dist = stats.gamma(a=shape, scale=scale)
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    if name == "Beta":
+        alpha = params.get("alpha", 2.0)
+        beta = params.get("beta", 2.0)
+        if alpha <= 0.0 or beta <= 0.0:
+            raise ValueError("Beta parameters must be positive.")
+        dist = stats.beta(a=alpha, b=beta)
+
+        def transform(u: np.ndarray) -> np.ndarray:
+            return np.asarray(dist.ppf(clip(u)), dtype=np.float64)
+
+        return transform
+    raise ValueError(f"Unsupported marginal distribution: {name}")
+
+
+def _apply_marginals(
+    samples: np.ndarray, selections: Sequence[MarginalSelection]
+) -> np.ndarray:
+    """Map pseudo-observations to user-selected margins."""
+
+    dim = samples.shape[1]
+    if len(selections) != dim:
+        raise ValueError(
+            "Marginal selections must match the sample dimension."
+        )
+    transformed = np.empty_like(samples, dtype=np.float64)
+    for idx, selection in enumerate(selections):
+        transform = _build_margin_transform(selection.name, selection.params)
+        transformed[:, idx] = transform(samples[:, idx])
+    return transformed
+
+
+def _summarise_marginals(
+    selections: Sequence[MarginalSelection],
+) -> Tuple[str, ...]:
+    """Format marginal configuration for display."""
+
+    formatted: List[str] = []
+    for idx, selection in enumerate(selections):
+        if selection.params:
+            params = ", ".join(
+                f"{key}={value:.3g}" for key, value in selection.params.items()
+            )
+            formatted.append(
+                f"X{idx + 1}: {selection.name} ({params})"
+            )
+        else:
+            formatted.append(f"X{idx + 1}: {selection.name}")
+    return tuple(formatted)
+
+
+def _summarise_samples(samples: np.ndarray, prefix: str) -> pd.DataFrame:
     """Return summary statistics for the generated sample."""
 
     df = pd.DataFrame(
         samples,
-        columns=[f"u{i + 1}" for i in range(samples.shape[1])],
+        columns=[f"{prefix}{i + 1}" for i in range(samples.shape[1])],
     )
     summary = df.describe(percentiles=[0.1, 0.5, 0.9]).T
     summary = summary.rename(columns={
@@ -278,29 +527,44 @@ def _summarise_samples(samples: np.ndarray) -> pd.DataFrame:
     return summary[["mean", "std", "min", "p10", "median", "p90", "max"]]
 
 
-def _plot_samples(samples: np.ndarray, title: str) -> None:
+def _plot_samples(
+    samples: np.ndarray,
+    title: str,
+    unit_cube: bool,
+    prefix: str,
+) -> None:
     """Display visual diagnostics for sandbox samples."""
 
     dim = samples.shape[1]
-    df = pd.DataFrame(samples, columns=[f"u{i + 1}" for i in range(dim)])
+    df = pd.DataFrame(
+        samples,
+        columns=[f"{prefix}{i + 1}" for i in range(dim)],
+    )
     if dim == 2:
         fig, ax = plt.subplots(figsize=(6, 5))
         sns.kdeplot(
             data=df,
-            x="u1",
-            y="u2",
+            x=f"{prefix}1",
+            y=f"{prefix}2",
             fill=True,
             cmap="magma",
             thresh=0.01,
             levels=40,
             ax=ax,
         )
-        ax.scatter(df["u1"], df["u2"], s=8, alpha=0.4, color="cyan")
-        ax.set_xlabel("u₁")
-        ax.set_ylabel("u₂")
+        ax.scatter(
+            df[f"{prefix}1"],
+            df[f"{prefix}2"],
+            s=8,
+            alpha=0.4,
+            color="cyan",
+        )
+        ax.set_xlabel(f"{prefix}₁")
+        ax.set_ylabel(f"{prefix}₂")
         ax.set_title(title)
-        ax.set_xlim(0.0, 1.0)
-        ax.set_ylim(0.0, 1.0)
+        if unit_cube:
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.0)
         st.pyplot(fig, clear_figure=True)
         return
     if dim <= _PAIRPLOT_MAX_DIM:
@@ -423,8 +687,13 @@ with st.sidebar:
 
 st.divider()
 
+marginal_choices = _render_marginal_controls(dim)
+
+st.divider()
+
 samples: np.ndarray | None = None
-metadata: Dict[str, str] = {}
+transformed: np.ndarray | None = None
+metadata: Dict[str, object] = {}
 
 try:
     if generation_mode == "Preset copula":
@@ -441,8 +710,21 @@ try:
             )
             metadata = {
                 "family": family,
-                **{k: f"{v:.4f}" for k, v in preset_params.items()},
+                "mode": "Preset copula",
+                "dimension": dim,
+                "sample_size": n_samples,
+                "seed": seed if seed is not None else "random",
             }
+            corr_param = preset_params.get("corr")
+            if isinstance(corr_param, np.ndarray):
+                metadata["corr"] = np.asarray(
+                    corr_param,
+                    dtype=np.float64,
+                ).round(3).tolist()
+            for key, value in preset_params.items():
+                if key == "corr":
+                    continue
+                metadata[key] = f"{float(value):.4f}"
     else:
         variable_names = tuple(f"u{i + 1}" for i in range(dim))
         c_expr, d_expr = _render_custom_builder(dim)
@@ -454,35 +736,84 @@ try:
             n=n_samples,
             seed=seed,
         )
-        metadata = {"family": "Custom", "density": d_expr[:60]}
+        metadata = {
+            "family": "Custom density",
+            "mode": "Custom expressions",
+            "dimension": dim,
+            "sample_size": n_samples,
+            "seed": seed if seed is not None else "random",
+            "cdf": c_expr.strip(),
+            "density": d_expr.strip(),
+        }
+    if samples is not None:
+        transformed = _apply_marginals(samples, marginal_choices)
 except Exception as exc:
     st.error(f"Generation failed: {exc}")
 
-if samples is not None:
+if samples is not None and transformed is not None:
     st.subheader("Sample overview")
-    df = pd.DataFrame(
+    overview = {
+        "dimension": dim,
+        "sample_size": n_samples,
+        "copula": metadata,
+        "marginals": _summarise_marginals(marginal_choices),
+    }
+    st.json(overview)
+
+    df_uniform = pd.DataFrame(
         samples,
         columns=[f"u{i + 1}" for i in range(samples.shape[1])],
     )
-    st.write("First rows of the generated pseudo-observations:")
-    st.dataframe(df.head(20))
-
-    st.write("Summary statistics across dimensions:")
-    st.dataframe(_summarise_samples(samples))
-
-    _plot_samples(samples, title="Sandbox sample diagnostics")
-
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
-    csv_bytes = csv_buffer.getvalue().encode("utf-8")
-    st.download_button(
-        label="Download sample as CSV",
-        data=csv_bytes,
-        file_name="copula_sandbox_samples.csv",
-        mime="text/csv",
+    df_transformed = pd.DataFrame(
+        transformed,
+        columns=[f"x{i + 1}" for i in range(transformed.shape[1])],
     )
 
+    tab_uniform, tab_transformed = st.tabs(
+        ["Pseudo-observations", "Transformed data"]
+    )
+
+    with tab_uniform:
+        st.write("First rows of the generated pseudo-observations:")
+        st.dataframe(df_uniform.head(20))
+        st.write("Summary statistics across dimensions:")
+        st.dataframe(_summarise_samples(samples, prefix="u"))
+        _plot_samples(
+            samples,
+            title="Pseudo-observations diagnostics",
+            unit_cube=True,
+            prefix="u",
+        )
+        csv_uniform = io.StringIO()
+        df_uniform.to_csv(csv_uniform, index=False)
+        st.download_button(
+            label="Download pseudo-observations",
+            data=csv_uniform.getvalue().encode("utf-8"),
+            file_name="copula_pseudo_observations.csv",
+            mime="text/csv",
+        )
+
+    with tab_transformed:
+        st.write("First rows of the transformed sample:")
+        st.dataframe(df_transformed.head(20))
+        st.write("Summary statistics across dimensions:")
+        st.dataframe(_summarise_samples(transformed, prefix="x"))
+        _plot_samples(
+            transformed,
+            title="Transformed sample diagnostics",
+            unit_cube=False,
+            prefix="x",
+        )
+        csv_transformed = io.StringIO()
+        df_transformed.to_csv(csv_transformed, index=False)
+        st.download_button(
+            label="Download transformed sample",
+            data=csv_transformed.getvalue().encode("utf-8"),
+            file_name="copula_transformed_sample.csv",
+            mime="text/csv",
+        )
+
     st.caption(
-        "Sampling assumes unit hypercube support. For custom densities,"
-        " weights are normalised automatically via importance resampling."
+        "Sampling occurs on the unit hypercube; marginal transformations are "
+        "applied post hoc using the selected distributions."
     )
