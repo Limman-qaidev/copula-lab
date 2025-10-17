@@ -9,6 +9,7 @@ from typing import Any, Iterable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 import streamlit as st
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -211,6 +212,178 @@ def _build_copula_model(result: FitResult, dim: int) -> BaseCopula | None:
 
     if result.family == "Student t":
         corr = reconstruct_corr(result.params, dim)
+        nu_value = result.params.get("nu")
+        if corr is None or nu_value is None:
+            return None
+        return StudentTCopula(corr=corr, nu=float(nu_value))
+
+    theta_value = result.params.get("theta")
+    if theta_value is None:
+        return None
+
+    theta = float(theta_value)
+    if result.family == "Clayton":
+        return ClaytonCopula(theta=theta, dim=dim)
+    if result.family == "Gumbel":
+        return GumbelCopula(theta=theta, dim=dim)
+    if result.family == "Frank":
+        return FrankCopula(theta=theta, dim=dim)
+    if result.family == "Joe":
+        return JoeCopula(theta=theta, dim=dim)
+    if result.family == "AMH":
+        if dim != 2:
+            logger.warning(
+                "AMH copula visualization requires two dimensions; "
+                "received %d.",
+                dim,
+            )
+            return None
+        return AMHCopula(theta=theta)
+
+    logger.warning(
+        "Unsupported copula family for visualization: %s",
+        result.family,
+    )
+    return None
+
+
+def plot_density_qq(
+    U_emp: np.ndarray,
+    copula_model: BaseCopula,
+    title: str,
+    *,
+    n_simulate: int = 5000,
+    seed: int = 1729,
+) -> None:
+    """
+    Render theoretical and empirical QQ diagnostics for copula densities.
+
+    Assumptions
+    ----------
+    - ``U_emp`` contains pseudo-observations strictly inside ``(0, 1)``.
+    - ``copula_model`` exposes ``pdf`` and ``rvs`` for the same dimension.
+
+    Limitations
+    -----------
+    - Monte Carlo noise may dominate for small samples or flat densities.
+    - Diagnostics rely on log densities; tails may require closer inspection.
+    """
+
+    data = np.asarray(U_emp, dtype=np.float64)
+    if data.ndim != 2:
+        raise ValueError(
+            "U_emp must be a 2D array of pseudo-observations."
+        )
+    if np.any((data <= 0.0) | (data >= 1.0)):
+        raise ValueError("Pseudo-observations must lie inside (0, 1).")
+
+    dim = data.shape[1]
+    if getattr(copula_model, "dim", dim) != dim:
+        raise ValueError(
+            "Copula dimension does not match the pseudo-observations."
+        )
+
+    n_model = min(max(n_simulate, dim * 500), 20000)
+    simulated = copula_model.rvs(n_model, seed=seed)
+    reference_simulated = copula_model.rvs(n_model, seed=seed + 1)
+
+    sim_array = np.asarray(simulated, dtype=np.float64)
+    ref_array = np.asarray(reference_simulated, dtype=np.float64)
+    if any(
+        (
+            sim_array.ndim != 2,
+            sim_array.shape[1] != dim,
+            ref_array.ndim != 2,
+            ref_array.shape[1] != dim,
+        )
+    ):
+        raise ValueError("Simulated samples have incompatible shapes.")
+
+    empirical_pdf = np.asarray(copula_model.pdf(data), dtype=np.float64)
+    model_pdf = np.asarray(copula_model.pdf(sim_array), dtype=np.float64)
+    reference_pdf = np.asarray(copula_model.pdf(ref_array), dtype=np.float64)
+
+    empirical_pdf = np.log(np.clip(empirical_pdf, 1e-12, None))
+    model_pdf = np.log(np.clip(model_pdf, 1e-12, None))
+    reference_pdf = np.log(np.clip(reference_pdf, 1e-12, None))
+
+    empirical_pdf = np.sort(empirical_pdf[np.isfinite(empirical_pdf)])
+    model_pdf = np.sort(model_pdf[np.isfinite(model_pdf)])
+    reference_pdf = np.sort(reference_pdf[np.isfinite(reference_pdf)])
+    if any(
+        (
+            empirical_pdf.size == 0,
+            model_pdf.size == 0,
+            reference_pdf.size == 0,
+        )
+    ):
+        raise ValueError("Density evaluation produced no finite values.")
+
+    theoretical_size = min(model_pdf.size, reference_pdf.size)
+    empirical_size = min(model_pdf.size, empirical_pdf.size)
+
+    model_for_theoretical = model_pdf[:theoretical_size]
+    reference_for_theoretical = reference_pdf[:theoretical_size]
+    model_for_empirical = model_pdf[:empirical_size]
+    empirical_for_empirical = empirical_pdf[:empirical_size]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0))
+
+    axes[0].scatter(
+        model_for_theoretical,
+        reference_for_theoretical,
+        s=12,
+        alpha=0.7,
+    )
+    reference_line = np.linspace(
+        min(
+            model_for_theoretical[0],
+            reference_for_theoretical[0],
+        ),
+        max(
+            model_for_theoretical[-1],
+            reference_for_theoretical[-1],
+        ),
+        100,
+    )
+    axes[0].plot(reference_line, reference_line, linestyle="--")
+    axes[0].set_xlabel("Model log density quantiles")
+    axes[0].set_ylabel("Reference log density quantiles")
+    axes[0].set_title("Theoretical QQ of log density")
+
+    reference_line = np.linspace(
+        min(model_for_empirical[0], empirical_for_empirical[0]),
+        max(model_for_empirical[-1], empirical_for_empirical[-1]),
+        100,
+    )
+    axes[1].scatter(
+        model_for_empirical,
+        empirical_for_empirical,
+        s=12,
+        alpha=0.7,
+    )
+    axes[1].plot(reference_line, reference_line, linestyle="--")
+    axes[1].set_xlabel("Model log density quantiles")
+    axes[1].set_ylabel("Empirical log density quantiles")
+    axes[1].set_title("Empirical QQ of log density")
+
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
+
+
+def _build_copula_model(result: FitResult, dim: int) -> BaseCopula | None:
+    """Instantiate a copula model from stored calibration parameters."""
+
+    if result.family == "Gaussian":
+        corr = _rebuild_corr(result.params, dim)
+        if corr is None:
+            return None
+        return GaussianCopula(corr=corr)
+
+    if result.family == "Student t":
+        corr = _rebuild_corr(result.params, dim)
         nu_value = result.params.get("nu")
         if corr is None or nu_value is None:
             return None
