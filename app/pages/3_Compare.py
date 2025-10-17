@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 import streamlit as st
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
