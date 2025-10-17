@@ -219,17 +219,17 @@ def plot_density_qq(
     seed: int = 1729,
 ) -> None:
     """
-    Render QQ diagnostics comparing empirical and model densities.
+    Render theoretical and empirical QQ diagnostics for copula densities.
 
     Assumptions
     ----------
-    - ``U_emp`` stores pseudo-observations strictly inside ``(0, 1)``.
-    - ``copula_model`` implements ``pdf`` and ``rvs`` consistently for ``dim``.
+    - ``U_emp`` contains pseudo-observations strictly inside ``(0, 1)``.
+    - ``copula_model`` exposes ``pdf`` and ``rvs`` for the same dimension.
 
     Limitations
     -----------
-    - Diagnostics rely on Monte Carlo simulation for the theoretical sample.
-    - Very small samples may yield noisy empirical quantiles.
+    - Monte Carlo noise may dominate for small samples or flat densities.
+    - Diagnostics rely on log densities; tails may require closer inspection.
     """
 
     data = np.asarray(U_emp, dtype=np.float64)
@@ -248,62 +248,90 @@ def plot_density_qq(
 
     n_model = min(max(n_simulate, dim * 500), 20000)
     simulated = copula_model.rvs(n_model, seed=seed)
+    reference_simulated = copula_model.rvs(n_model, seed=seed + 1)
+
     sim_array = np.asarray(simulated, dtype=np.float64)
-    if sim_array.ndim != 2 or sim_array.shape[1] != dim:
-        raise ValueError("Simulated sample has incompatible shape.")
+    ref_array = np.asarray(reference_simulated, dtype=np.float64)
+    if any(
+        (
+            sim_array.ndim != 2,
+            sim_array.shape[1] != dim,
+            ref_array.ndim != 2,
+            ref_array.shape[1] != dim,
+        )
+    ):
+        raise ValueError("Simulated samples have incompatible shapes.")
 
     empirical_pdf = np.asarray(copula_model.pdf(data), dtype=np.float64)
     model_pdf = np.asarray(copula_model.pdf(sim_array), dtype=np.float64)
+    reference_pdf = np.asarray(copula_model.pdf(ref_array), dtype=np.float64)
 
     empirical_pdf = np.log(np.clip(empirical_pdf, 1e-12, None))
     model_pdf = np.log(np.clip(model_pdf, 1e-12, None))
+    reference_pdf = np.log(np.clip(reference_pdf, 1e-12, None))
 
     empirical_pdf = np.sort(empirical_pdf[np.isfinite(empirical_pdf)])
     model_pdf = np.sort(model_pdf[np.isfinite(model_pdf)])
-    if empirical_pdf.size == 0 or model_pdf.size == 0:
+    reference_pdf = np.sort(reference_pdf[np.isfinite(reference_pdf)])
+    if any(
+        (
+            empirical_pdf.size == 0,
+            model_pdf.size == 0,
+            reference_pdf.size == 0,
+        )
+    ):
         raise ValueError("Density evaluation produced no finite values.")
 
-    sample_size = min(empirical_pdf.size, model_pdf.size)
-    empirical_pdf = empirical_pdf[:sample_size]
-    model_pdf = model_pdf[:sample_size]
+    theoretical_size = min(model_pdf.size, reference_pdf.size)
+    empirical_size = min(model_pdf.size, empirical_pdf.size)
+
+    model_for_theoretical = model_pdf[:theoretical_size]
+    reference_for_theoretical = reference_pdf[:theoretical_size]
+    model_for_empirical = model_pdf[:empirical_size]
+    empirical_for_empirical = empirical_pdf[:empirical_size]
 
     fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0))
 
     axes[0].scatter(
-        model_pdf,
-        empirical_pdf,
+        model_for_theoretical,
+        reference_for_theoretical,
         s=12,
         alpha=0.7,
-        edgecolor="none",
     )
-    reference = np.linspace(
-        min(model_pdf[0], empirical_pdf[0]),
-        max(model_pdf[-1], empirical_pdf[-1]),
+    reference_line = np.linspace(
+        min(
+            model_for_theoretical[0],
+            reference_for_theoretical[0],
+        ),
+        max(
+            model_for_theoretical[-1],
+            reference_for_theoretical[-1],
+        ),
         100,
     )
-    axes[0].plot(reference, reference, linestyle="--", color="black")
-    axes[0].set_xlabel("Cuantiles teóricos log f(U)")
-    axes[0].set_ylabel("Cuantiles empíricos log f(U)")
-    axes[0].set_title("QQ densidades (teórico vs empírico)")
+    axes[0].plot(reference_line, reference_line, linestyle="--")
+    axes[0].set_xlabel("Model log density quantiles")
+    axes[0].set_ylabel("Reference log density quantiles")
+    axes[0].set_title("Theoretical QQ of log density")
 
-    probabilities = (
-        (np.arange(1, sample_size + 1) - 0.5) / float(sample_size)
+    reference_line = np.linspace(
+        min(model_for_empirical[0], empirical_for_empirical[0]),
+        max(model_for_empirical[-1], empirical_for_empirical[-1]),
+        100,
     )
-    axes[1].plot(probabilities, model_pdf, label="Teórico", linewidth=1.5)
-    axes[1].plot(
-        probabilities,
-        empirical_pdf,
-        label="Empírico",
-        linewidth=1.5,
-        linestyle="--",
+    axes[1].scatter(
+        model_for_empirical,
+        empirical_for_empirical,
+        s=12,
+        alpha=0.7,
     )
-    axes[1].set_xlabel("Probabilidad acumulada")
-    axes[1].set_ylabel("Cuantiles log f(U)")
-    axes[1].set_title("Funciones cuantiles comparadas")
-    axes[1].legend()
+    axes[1].plot(reference_line, reference_line, linestyle="--")
+    axes[1].set_xlabel("Model log density quantiles")
+    axes[1].set_ylabel("Empirical log density quantiles")
+    axes[1].set_title("Empirical QQ of log density")
 
     fig.suptitle(title)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
     st.pyplot(fig, clear_figure=True)
     plt.close(fig)
 
@@ -338,8 +366,8 @@ for idx, result in enumerate(fit_results):
         nu = result.params.get("nu")
         if corr is None or not isinstance(nu, float):
             st.warning(
-                "Student t model requires correlation entries and "
-                "nu to compute metrics."
+                "Student t model requires correlation entries and nu to "
+                "compute metrics."
             )
         else:
             try:
@@ -368,14 +396,9 @@ for idx, result in enumerate(fit_results):
         }
     )
 
-criterion_label = st.selectbox(
-    "Ranking criterion",
-    ("LogLik", "AIC", "BIC"),
-    format_func=lambda key: {
-        "LogLik": "Log-likelihood (higher is better)",
-        "AIC": "Akaike Information Criterion (lower is better)",
-        "BIC": "Bayesian Information Criterion (lower is better)",
-    }[key],
+criterion_label = "BIC"
+st.caption(
+    "Ranking criterion: Bayesian Information Criterion (lower is better)."
 )
 
 sorted_rows = sorted(rows, key=lambda row: _sort_key(criterion_label, row))
@@ -411,7 +434,7 @@ if pd is not None and altair_spec is not None:
     if not chart_source.empty:
         chart = (
             altair_module.Chart(chart_source)
-            .mark_bar(color="#2563eb")
+            .mark_bar()
             .encode(
                 x=altair_module.X(
                     "Params",
@@ -430,7 +453,7 @@ best_row = sorted_rows[0] if sorted_rows else None
 if best_row is not None:
     session_utils.set_best_model_index(best_row["Index"])
     st.success(
-        "Mejor copula según {criterion}: {label}.".format(
+        "Best copula by {criterion}: {label}.".format(
             criterion=criterion_label,
             label=f"{best_row['Family']} ({best_row['Method']})",
         )
@@ -442,7 +465,7 @@ for row in sorted_rows:
     model = _build_copula_model(result, dim)
     if model is None:
         st.warning(
-            "No fue posible reconstruir la copula {label} para QQ.".format(
+            "Failed to rebuild the copula {label} for QQ diagnostics.".format(
                 label=f"{result.family} ({result.method})",
             )
         )
@@ -452,10 +475,10 @@ for row in sorted_rows:
 
 if not models_for_tabs:
     st.info(
-        "No hay copulas calibradas disponibles para comparar las densidades."
+        "No calibrated copulas are available for density diagnostics."
     )
 else:
-    st.subheader("Comparación de densidades mediante QQ")
+    st.subheader("QQ diagnostics by copula")
     tabs = st.tabs([label for label, _ in models_for_tabs])
     for tab, (label, model) in zip(tabs, models_for_tabs):
         with tab:
@@ -463,7 +486,9 @@ else:
                 plot_density_qq(
                     U,
                     model,
-                    f"{label}: diagnóstico QQ de densidades",
+                    f"{label}: density QQ diagnostics",
                 )
             except ValueError as exc:
-                st.warning(f"No se pudo generar el QQ para {label}: {exc}")
+                st.warning(
+                    f"Failed to render QQ diagnostics for {label}: {exc}"
+                )
