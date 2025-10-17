@@ -37,19 +37,32 @@ def _show_altair_chart(chart: Any) -> None:
 
     altair_renderer = getattr(st, "altair_chart")
     if _supports_width_kwarg(altair_renderer):
-        altair_renderer(chart, width="stretch")
-    else:
-        altair_renderer(chart, use_container_width=True)
+        try:
+            altair_renderer(chart, width="stretch")
+            return
+        except TypeError:
+            pass
+    altair_renderer(chart, use_container_width=True)
 
+def _load_preview(
+    raw: bytes,
+    columns: Iterable[str],
+    encoding: str,
+    header: List[str],
+) -> np.ndarray:
+    selected = list(columns)
+    if not selected:
+        raise ValueError("Select at least one column for the preview.")
 
 def _show_dataframe(*, data: Any, hide_index: bool = True) -> None:
     dataframe_renderer = getattr(st, "dataframe")
     if _supports_width_kwarg(dataframe_renderer):
-        dataframe_renderer(data, width="stretch", hide_index=hide_index)
-    else:
-        dataframe_renderer(
-            data, use_container_width=True, hide_index=hide_index
-        )
+        try:
+            dataframe_renderer(data, width="stretch", hide_index=hide_index)
+            return
+        except TypeError:
+            pass
+    dataframe_renderer(data, use_container_width=True, hide_index=hide_index)
 
 
 def _safe_decode(raw: bytes, encoding: str) -> io.TextIOWrapper:

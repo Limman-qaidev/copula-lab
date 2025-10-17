@@ -369,6 +369,17 @@ def main() -> None:
     labels = st.session_state.get("U_columns")
     label_tuple = tuple(labels) if isinstance(labels, (list, tuple)) else None
 
+    dataset_entry = session_utils.get_dataset()
+    if dataset_entry is not None:
+        dataset_values, dataset_columns = dataset_entry
+        if dataset_values.shape[1] == dim:
+            joined = ", ".join(dataset_columns)
+            st.caption(
+                f"Using pseudo-observations derived from columns: {joined}"
+            )
+        else:
+            st.caption("Dataset dimensions do not match pseudo-observations.")
+
     logger.info("Calibration page loaded: n_obs=%d dim=%d", n_obs, dim)
     st.write(f"Pseudo-observations in memory: n={n_obs}, d={dim}")
 

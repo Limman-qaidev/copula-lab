@@ -1,3 +1,5 @@
+"""Rosenblatt transforms and goodness-of-fit diagnostics."""
+
 from __future__ import annotations
 
 from typing import Callable

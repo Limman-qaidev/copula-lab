@@ -1,3 +1,5 @@
+"""Helpers to persist state across Streamlit tabs."""
+
 from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple, cast

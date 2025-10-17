@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import sys
 from pathlib import Path
@@ -45,6 +46,15 @@ logger.info(
     "Compare page loaded with pseudo-observations: n=%d d=%d", n_obs, dim
 )
 
+dataset_entry = session_utils.get_dataset()
+if dataset_entry is not None:
+    dataset_values, dataset_columns = dataset_entry
+    if dataset_values.shape[1] == dim:
+        st.caption(
+            "Evaluating models on columns: " + ", ".join(dataset_columns)
+        )
+
+
 fit_results = list(session_utils.get_fit_results())
 if not fit_results:
     st.info("Run at least one calibration before comparing models.")
@@ -58,6 +68,14 @@ if not fit_results:
 st.write(f"Models available for comparison: {len(fit_results)}")
 
 
+def _supports_width_kwarg(renderer: Any) -> bool:
+    try:
+        signature = inspect.signature(renderer)
+    except (TypeError, ValueError):
+        return False
+    return "width" in signature.parameters
+
+
 def _load_pandas() -> Any:
     if importlib.util.find_spec("pandas") is None:
         return None
@@ -67,10 +85,27 @@ def _load_pandas() -> Any:
 
 
 def _show_altair_chart(chart: Any) -> None:
-    """Render an Altair chart using the new Streamlit width API."""
+    """Render an Altair chart using a width-aware fallback."""
 
     altair_renderer = getattr(st, "altair_chart")
-    altair_renderer(chart, width="stretch")
+    if _supports_width_kwarg(altair_renderer):
+        try:
+            altair_renderer(chart, width="stretch")
+            return
+        except TypeError:
+            pass
+    altair_renderer(chart, use_container_width=True)
+
+
+def _show_dataframe(data: Any, *, hide_index: bool = True) -> None:
+    dataframe_renderer = getattr(st, "dataframe")
+    if _supports_width_kwarg(dataframe_renderer):
+        try:
+            dataframe_renderer(data, width="stretch", hide_index=hide_index)
+            return
+        except TypeError:
+            pass
+    dataframe_renderer(data, use_container_width=True, hide_index=hide_index)
 
 
 def _sort_key(criterion: str, row: dict[str, Any]) -> tuple[int, float]:
@@ -197,7 +232,7 @@ display_columns: Iterable[str] = (
 )
 if pd is not None:
     frame = pd.DataFrame(sorted_rows)
-    st.dataframe(frame.loc[:, display_columns], width="stretch")
+    _show_dataframe(frame.loc[:, display_columns])
 else:
     st.table(
         [{col: row[col] for col in display_columns} for row in sorted_rows]
