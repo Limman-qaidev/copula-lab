@@ -77,6 +77,25 @@ def test_student_ifm_recovers_parameters() -> None:
     assert outcome.result.params["nu"] == pytest.approx(nu_true, rel=0.05)
 
 
+def test_student_low_nu_recovery() -> None:
+    corr_true = np.array(
+        [[1.0, 0.4, -0.2], [0.4, 1.0, 0.35], [-0.2, 0.35, 1.0]],
+        dtype=np.float64,
+    )
+    nu_true = 2.0
+    samples = StudentTCopula(corr=corr_true, nu=nu_true).rvs(22000, seed=13)
+
+    outcome_tau = run_calibration("Student t", "Tau inversion", samples)
+    assert outcome_tau.result.params["nu"] == pytest.approx(
+        nu_true, abs=0.1
+    )
+
+    outcome_ifm = run_calibration("Student t", "IFM", samples)
+    assert outcome_ifm.result.params["nu"] == pytest.approx(
+        nu_true, abs=0.1
+    )
+
+
 def test_student_pmle_recovers_parameters() -> None:
     corr_true = np.array(
         [[1.0, 0.45, 0.2], [0.45, 1.0, -0.3], [0.2, -0.3, 1.0]],

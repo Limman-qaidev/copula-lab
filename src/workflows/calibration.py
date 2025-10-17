@@ -84,19 +84,19 @@ ifm_callable: GaussianMatrixFunc | None = _gaussian_ifm_corr
 
 
 def _estimate_student_nu(
-    U: FloatArray, corr: NDArray[np.float64]
+    U: FloatArray, corr: NDArray[np.float64], min_nu: float = 2.0
 ) -> float:
     if minimize_scalar is None:
         lambda_upper = average_tail_dep_upper(U)
         return choose_nu_from_tail(lambda_upper)
 
     def objective(nu_val: float) -> float:
-        if nu_val <= 2.05:
+        if nu_val < min_nu:
             return float("inf")
         return -student_t_pseudo_loglik(U, corr, nu_val)
 
     result = minimize_scalar(
-        objective, bounds=(2.05, 60.0), method="bounded"
+        objective, bounds=(min_nu, 60.0), method="bounded"
     )
     if not result.success:
         lambda_upper = average_tail_dep_upper(U)

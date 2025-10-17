@@ -61,7 +61,7 @@ MARGINAL_LIBRARY: Dict[str, Tuple[MarginalParameter, ...]] = {
         MarginalParameter("std", "Standard deviation", 1.0, 0.1, 5.0, 0.1),
     ),
     "Student t": (
-        MarginalParameter("df", "Degrees of freedom", 5.0, 2.1, 30.0, 0.1),
+        MarginalParameter("df", "Degrees of freedom", 5.0, 2.0, 30.0, 0.1),
         MarginalParameter("loc", "Location", 0.0, -5.0, 5.0, 0.1),
         MarginalParameter("scale", "Scale", 1.0, 0.1, 5.0, 0.1),
     ),
@@ -157,7 +157,7 @@ def _render_preset_controls(dim: int) -> Tuple[str, ParamDict]:
         if family == "Student t":
             nu = st.slider(
                 "Degrees of freedom (nu)",
-                min_value=2.1,
+                min_value=2.0,
                 max_value=30.0,
                 value=6.0,
                 step=0.1,

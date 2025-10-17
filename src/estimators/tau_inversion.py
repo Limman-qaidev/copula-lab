@@ -87,6 +87,9 @@ def rho_matrix_from_tau_student_t(
     return rho_matrix_from_tau_gaussian(tau_matrix)
 
 
+_MIN_STUDENT_NU = 2.0
+
+
 def choose_nu_from_tail(lambda_u: float | None) -> float:
     """Select degrees of freedom from an optional upper tail dependence."""
 
@@ -96,7 +99,7 @@ def choose_nu_from_tail(lambda_u: float | None) -> float:
     tail = max(0.0, min(0.99, float(lambda_u)))
     # Monotone map: larger tail dependence yields smaller nu (heavier tails).
     nu = 10.0 - 6.0 * tail
-    return float(max(2.1, nu))
+    return float(max(_MIN_STUDENT_NU, nu))
 
 
 def theta_from_tau_clayton(tau: float) -> float:
